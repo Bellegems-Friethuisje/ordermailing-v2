@@ -1,0 +1,1 @@
+const fs = require('fs'); const key = fs.readFileSync('.env', 'utf8').match(/GEMINI_API_KEY=\"([^\"]+)\"/)[1]; fetch('https://generativelanguage.googleapis.com/v1beta/models?key=' + key).then(r=>r.json()).then(d=>console.log(JSON.stringify(d.models.filter(m=>m.name.includes('imagen'))))).catch(console.log);

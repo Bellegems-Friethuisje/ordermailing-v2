@@ -7,9 +7,9 @@ import vikeVue from "vike-vue/config";
 
 export default {
   // https://vike.dev/head-tags
-  title: "My Vike App",
+  title: "Ordermailing",
 
-  description: "Demo showcasing Vike",
+  description: "Ordermailing",
   extends: [vikeVue, vikePhoton],
 
   // https://vike.dev/vike-photon
