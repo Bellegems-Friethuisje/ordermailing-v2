@@ -1,7 +1,8 @@
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { adminAuth } from "../firebase-admin";
-import puppeteer from "puppeteer";
+import puppeteer from "puppeteer-core";
+import chromium from "@sparticuz/chromium";
 import * as cheerio from "cheerio";
 
 export interface MachineItem {
@@ -41,10 +42,15 @@ automaten.get("/", async (c) => {
 
   let browser;
   try {
+    const isLocal = process.env.NODE_ENV === "development";
+
     browser = await puppeteer.launch({
-      headless: true,
-      executablePath: process.env.CHROMIUM_PATH || undefined,
-      args: ["--no-sandbox", "--disable-setuid-sandbox"],
+      headless: isLocal ? true : chromium.headless,
+      executablePath: isLocal
+        ? process.env.CHROMIUM_PATH || "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+        : await chromium.executablePath(),
+      args: isLocal ? ["--no-sandbox", "--disable-setuid-sandbox"] : chromium.args,
+      defaultViewport: chromium.defaultViewport,
     });
 
     const page = await browser.newPage();
