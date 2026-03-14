@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { adminAuth } from "../firebase-admin";
 import puppeteer from "puppeteer-core";
-import chromium from "@sparticuz/chromium";
+import chromium from "@sparticuz/chromium-min";
 import * as cheerio from "cheerio";
 
 export interface MachineItem {
@@ -48,7 +48,7 @@ automaten.get("/", async (c) => {
       headless: isLocal ? true : chromium.headless,
       executablePath: isLocal
         ? process.env.CHROMIUM_PATH || "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
-        : await chromium.executablePath(),
+        : await chromium.executablePath("https://github.com/Sparticuz/chromium/releases/download/v131.0.1/chromium-v131.0.1-pack.tar"),
       args: isLocal ? ["--no-sandbox", "--disable-setuid-sandbox"] : chromium.args,
       defaultViewport: chromium.defaultViewport,
     });
