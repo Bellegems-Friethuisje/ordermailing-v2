@@ -5,6 +5,26 @@
       <p class="text-muted-foreground text-sm">Manage application settings and data.</p>
     </div>
 
+    <!-- Appearance section -->
+    <div class="rounded-lg border">
+      <div class="flex flex-col gap-1 border-b px-6 py-4">
+        <h2 class="font-semibold">Appearance</h2>
+        <p class="text-sm text-muted-foreground">Customize how the application looks.</p>
+      </div>
+      <div class="px-6 py-5">
+        <div class="flex items-center justify-between">
+          <div>
+            <p class="text-sm font-medium">Dark mode</p>
+            <p class="text-xs text-muted-foreground">Switch between light and dark theme.</p>
+          </div>
+          <Button variant="outline" size="icon" @click="toggleTheme" :aria-label="isDark ? 'Switch to light mode' : 'Switch to dark mode'">
+            <Sun v-if="isDark" class="size-4" />
+            <Moon v-else class="size-4" />
+          </Button>
+        </div>
+      </div>
+    </div>
+
     <!-- Import section -->
     <div class="rounded-lg border">
       <div class="flex flex-col gap-1 border-b px-6 py-4">
@@ -126,8 +146,11 @@
 
 <script setup lang="ts">
 import { ref } from "vue";
-import { FileJson, Upload, Loader2, CheckCircle } from "lucide-vue-next";
+import { FileJson, Upload, Loader2, CheckCircle, Sun, Moon } from "lucide-vue-next";
 import { Button } from "@/components/ui/button";
+import { useTheme } from "@/lib/useTheme";
+
+const { isDark, toggleTheme } = useTheme();
 import {
   Dialog,
   DialogContent,

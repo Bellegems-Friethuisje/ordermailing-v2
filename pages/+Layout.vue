@@ -200,11 +200,13 @@ import { Separator } from "@/components/ui/separator";
 import { sentryBrowserConfig } from "../sentry.browser.config";
 import { useAuth } from "@/lib/useAuth";
 import { apiFetch } from "@/lib/apiFetch";
+import { useTheme } from "@/lib/useTheme";
 
 sentryBrowserConfig();
 
 const pageContext = usePageContext();
 const { currentUser, loading, signOut } = useAuth();
+const { initTheme } = useTheme();
 
 // ─── Auth guard ───────────────────────────────────────────────────────────────
 // Once Firebase resolves auth state, redirect unauthenticated users to /login.
@@ -256,6 +258,7 @@ const resumeOpen = ref(false);
 const resumeSupplierName = ref("");
 
 onMounted(() => {
+  initTheme();
   if (typeof window === "undefined") return;
   if (window.location.pathname === "/orders/new") return;
   const raw = localStorage.getItem("order_draft");
