@@ -33,6 +33,10 @@ async function sendOrderEmail(orderId: string, orderData: any) {
     )
     .join("");
 
+  const notesSection = orderData.notes
+    ? `<br/><p><strong>Additional notes:</strong><br/>${orderData.notes.replace(/\n/g, "<br/>")}</p>`
+    : "";
+
   const html = `
     <p>Please find our order details below:</p>
     <table style="border-collapse: collapse; width: 100%; max-width: 600px; text-align: left;">
@@ -46,6 +50,7 @@ async function sendOrderEmail(orderId: string, orderData: any) {
         ${tableRows}
       </tbody>
     </table>
+    ${notesSection}
     <br/>
     <hr/>
     <p>
@@ -120,6 +125,7 @@ orders.post("/", async (c) => {
     supplierName: string;
     supplierEmail: string;
     status?: string;
+    notes?: string;
     lines: Array<{
       productId: string;
       supplierName: string;
@@ -141,6 +147,7 @@ orders.post("/", async (c) => {
     supplierName: body.supplierName,
     supplierEmail: body.supplierEmail,
     lines: body.lines,
+    notes: body.notes ?? "",
     createdBy: uid,
     createdByName: userName,
     createdAt: new Date().toISOString(),
@@ -148,7 +155,7 @@ orders.post("/", async (c) => {
   });
 
   if ((body.status ?? "pending") === "pending") {
-    sendOrderEmail(ref.id, { supplierEmail: body.supplierEmail, lines: body.lines });
+    sendOrderEmail(ref.id, { supplierEmail: body.supplierEmail, lines: body.lines, notes: body.notes ?? "" });
   }
 
   return c.json({ ok: true, id: ref.id }, 201);
@@ -160,6 +167,7 @@ orders.patch("/:id", async (c) => {
   const body = await c.req.json<{
     lines?: Array<{ productId: string; supplierName: string; internalName: string; quantity: number }>;
     status?: string;
+    notes?: string;
   }>();
 
   const docRef = db.collection("orders").doc(id);
@@ -172,6 +180,7 @@ orders.patch("/:id", async (c) => {
   const update: Record<string, unknown> = { updatedAt: new Date().toISOString() };
   if (body.lines !== undefined) update.lines = body.lines;
   if (body.status !== undefined) update.status = body.status;
+  if (body.notes !== undefined) update.notes = body.notes;
 
   await docRef.update(update);
 

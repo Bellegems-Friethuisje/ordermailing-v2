@@ -112,7 +112,11 @@
             class="size-12 shrink-0 rounded-xl text-lg"
             size="icon"
             :disabled="(quantities[product.id] ?? 0) <= 0"
-            @click="adjust(product.id, -1)"
+            @mousedown="startPress(product.id, -1)"
+            @touchstart.prevent="startPress(product.id, -1)"
+            @mouseup="stopPress"
+            @mouseleave="stopPress"
+            @touchend="stopPress"
           >
             <Minus class="size-5" />
           </Button>
@@ -131,7 +135,11 @@
             class="size-12 shrink-0 rounded-xl text-lg"
             size="icon"
             :disabled="!product.manualOrder && (quantities[product.id] ?? 0) >= product.idealStock"
-            @click="adjust(product.id, 1)"
+            @mousedown="startPress(product.id, 1)"
+            @touchstart.prevent="startPress(product.id, 1)"
+            @mouseup="stopPress"
+            @mouseleave="stopPress"
+            @touchend="stopPress"
           >
             <Plus class="size-5" />
           </Button>
@@ -182,6 +190,14 @@
         <component :is="isDesktop ? DialogTitle : DrawerTitle">Order for {{ selectedSupplier?.name }}</component>
         <component :is="isDesktop ? DialogDescription : DrawerDescription">Review your order before sending.</component>
       </component>
+
+      <div :class="['mt-3', !isDesktop && 'px-6']">
+        <Textarea
+          v-model="notes"
+          placeholder="Additional notes (optional)…"
+          class="min-h-[80px] resize-none text-sm"
+        />
+      </div>
 
       <div :class="['overflow-y-auto rounded-md border', isDesktop ? 'max-h-80' : 'mx-6 max-h-[55vh]']">
         <table class="w-full text-sm">
@@ -282,6 +298,7 @@ import {
 } from "lucide-vue-next";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import {
   Dialog,
@@ -686,10 +703,33 @@ function setQty(productId: string, val: number) {
   onQuantityChange();
 }
 
+// ─── Hold-to-repeat ───────────────────────────────────────────────────────────
+let pressActive = false;
+let pressTimer: ReturnType<typeof setTimeout> | null = null;
+
+function startPress(productId: string, delta: number) {
+  adjust(productId, delta);
+  pressActive = true;
+  pressTimer = setTimeout(() => repeat(productId, delta), 400);
+}
+
+function repeat(productId: string, delta: number) {
+  if (!pressActive) return;
+  adjust(productId, delta);
+  const delay = (quantities[productId] ?? 0) > 5 ? 50 : 150;
+  pressTimer = setTimeout(() => repeat(productId, delta), delay);
+}
+
+function stopPress() {
+  pressActive = false;
+  if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; }
+}
+
 // ─── Review & submit ──────────────────────────────────────────────────────────
 const reviewOpen = ref(false);
 const submitting = ref(false);
 const successOpen = ref(false);
+const notes = ref("");
 const lastOrderSupplier = ref("");
 const confirmLeaveOpen = ref(false);
 const pendingNavUrl = ref<string | null>(null);
@@ -783,7 +823,7 @@ async function submitOrder() {
       await apiFetch(`/api/orders/${draftId.value}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ lines: orderLines.value, status: "pending" }),
+        body: JSON.stringify({ lines: orderLines.value, status: "pending", notes: notes.value }),
       });
     } else {
       // No draft yet — create directly as pending
@@ -796,6 +836,7 @@ async function submitOrder() {
           supplierEmail: selectedSupplier.value.email,
           lines: orderLines.value,
           status: "pending",
+          notes: notes.value,
         }),
       });
       const data = (await res.json()) as { id: string };
@@ -817,6 +858,7 @@ function newOrder() {
   supplierSearch.value = "";
   draftId.value = null;
   saveStatus.value = "idle";
+  notes.value = "";
   stopSyncTimer();
 }
 </script>
