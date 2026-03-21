@@ -823,10 +823,10 @@ async function submitOrder() {
       await apiFetch(`/api/orders/${draftId.value}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ lines: orderLines.value, status: "pending", notes: notes.value }),
+        body: JSON.stringify({ lines: orderLines.value, status: "sent", notes: notes.value }),
       });
     } else {
-      // No draft yet — create directly as pending
+      // No draft yet — create directly as sent
       const res = await apiFetch("/api/orders", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -835,7 +835,7 @@ async function submitOrder() {
           supplierName: selectedSupplier.value.name,
           supplierEmail: selectedSupplier.value.email,
           lines: orderLines.value,
-          status: "pending",
+          status: "sent",
           notes: notes.value,
         }),
       });

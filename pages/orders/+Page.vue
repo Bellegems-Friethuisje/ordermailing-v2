@@ -205,7 +205,6 @@ const StatusBadge = {
   setup(props: { status: string }) {
     const cfg: Record<string, { label: string; cls: string }> = {
       draft: { label: "Draft", cls: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400" },
-      pending: { label: "Pending", cls: "bg-blue-100   text-blue-800   dark:bg-blue-900/30   dark:text-blue-400" },
       sent: { label: "Sent", cls: "bg-green-100  text-green-800  dark:bg-green-900/30  dark:text-green-400" },
     };
     const c = computed(() => cfg[props.status] ?? { label: props.status, cls: "bg-muted text-muted-foreground" });
@@ -218,7 +217,6 @@ const StatusBadge = {
 const filters = [
   { label: "All", value: "all" },
   { label: "Drafts", value: "draft" },
-  { label: "Pending", value: "pending" },
   { label: "Sent", value: "sent" },
 ];
 const activeFilter = ref("all");

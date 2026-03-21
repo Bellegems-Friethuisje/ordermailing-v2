@@ -151,10 +151,10 @@ orders.post("/", async (c) => {
     createdBy: uid,
     createdByName: userName,
     createdAt: new Date().toISOString(),
-    status: body.status ?? "pending",
+    status: body.status ?? "sent",
   });
 
-  if ((body.status ?? "pending") === "pending") {
+  if ((body.status ?? "sent") === "sent") {
     sendOrderEmail(ref.id, { supplierEmail: body.supplierEmail, lines: body.lines, notes: body.notes ?? "" });
   }
 
@@ -184,7 +184,7 @@ orders.patch("/:id", async (c) => {
 
   await docRef.update(update);
 
-  if (body.status === "pending" && snap.data()?.status !== "pending") {
+  if (body.status === "sent" && snap.data()?.status !== "sent") {
     const updatedSnap = await docRef.get();
     sendOrderEmail(id, updatedSnap.data());
   }
