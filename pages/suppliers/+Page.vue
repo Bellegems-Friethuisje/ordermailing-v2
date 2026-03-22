@@ -132,7 +132,7 @@
           <Input v-model="supplierForm.email" type="email" placeholder="supplier@example.com" />
         </div>
         <div class="flex items-center gap-2">
-          <Checkbox id="supplier-active" v-model:checked="supplierForm.isActive" />
+          <Checkbox id="supplier-active" v-model="supplierForm.isActive" />
           <label for="supplier-active" class="cursor-pointer text-sm font-medium">Active</label>
         </div>
       </div>
@@ -361,14 +361,15 @@
           <Input v-model.number="productForm.idealStock" type="number" min="0" placeholder="0" />
         </div>
         <div class="flex items-center gap-2">
-          <Checkbox id="product-manual" v-model:checked="productForm.manualOrder" />
+          <Checkbox id="product-manual" v-model="productForm.manualOrder" />
           <label for="product-manual" class="cursor-pointer text-sm font-medium">Manual order</label>
         </div>
         <div class="flex items-center gap-2">
-          <Checkbox id="product-active" v-model:checked="productForm.isActive" />
+          <Checkbox id="product-active" v-model="productForm.isActive" />
           <label for="product-active" class="cursor-pointer text-sm font-medium">Active</label>
         </div>
       </div>
+      <p v-if="productSaveError" :class="['text-sm text-destructive', !isDesktop && 'px-6']">{{ productSaveError }}</p>
       <component :is="isDesktop ? DialogFooter : DrawerFooter" :class="['mt-2', !isDesktop && 'px-6 pb-6']">
         <Button variant="outline" :disabled="productSaving" @click="productFormOpen = false">Cancel</Button>
         <Button :disabled="productSaving" @click="saveProduct">
@@ -550,6 +551,7 @@ async function onDragEnd() {
 const productFormOpen = ref(false);
 const editingProduct = ref<Product | null>(null);
 const productSaving = ref(false);
+const productSaveError = ref("");
 const productForm = reactive({
   supplierName: "",
   internalName: "",
@@ -669,6 +671,7 @@ function openAddProduct() {
   productForm.isActive = true;
   productForm.idealStock = 0;
   productForm.displayOrder = 0;
+  productSaveError.value = "";
   productFormOpen.value = true;
 }
 
@@ -680,27 +683,42 @@ function openEditProduct(product: Product) {
   productForm.isActive = product.isActive;
   productForm.idealStock = product.idealStock;
   productForm.displayOrder = product.displayOrder;
+  productSaveError.value = "";
   productFormOpen.value = true;
 }
 
 async function saveProduct() {
   if (!productForm.supplierName || !productForm.internalName || !selectedSupplier.value) return;
   productSaving.value = true;
+  productSaveError.value = "";
   try {
     if (editingProduct.value) {
-      await apiFetch(`/api/suppliers/${selectedSupplier.value.id}/products/${editingProduct.value.id}`, {
+      const res = await apiFetch(`/api/suppliers/${selectedSupplier.value.id}/products/${editingProduct.value.id}`, {
         method: "PATCH",
         body: JSON.stringify(productForm),
       });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        productSaveError.value = (err as any).message ?? `Save failed (${res.status})`;
+        return;
+      }
+      // Update in place — no re-fetch needed
+      const idx = products.value.findIndex((p) => p.id === editingProduct.value!.id);
+      if (idx !== -1) products.value[idx] = { ...products.value[idx], ...productForm };
     } else {
-      await apiFetch(`/api/suppliers/${selectedSupplier.value.id}/products`, {
+      const res = await apiFetch(`/api/suppliers/${selectedSupplier.value.id}/products`, {
         method: "POST",
         body: JSON.stringify(productForm),
       });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        productSaveError.value = (err as any).message ?? `Save failed (${res.status})`;
+        return;
+      }
+      await fetchProducts(selectedSupplier.value.id);
+      await fetchSuppliers();
     }
     productFormOpen.value = false;
-    await fetchProducts(selectedSupplier.value.id);
-    await fetchSuppliers();
   } finally {
     productSaving.value = false;
   }
