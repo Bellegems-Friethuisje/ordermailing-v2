@@ -95,7 +95,7 @@
         <div class="flex flex-col gap-6 lg:flex-row lg:items-start">
 
           <!-- Left: filter tabs + grid -->
-          <div class="flex min-w-0 flex-1 flex-col gap-4">
+          <div class="order-2 lg:order-1 flex min-w-0 flex-1 flex-col gap-4">
             <!-- Filter tabs -->
             <div class="flex items-center gap-1 rounded-lg border bg-muted/40 p-1 w-fit">
               <button
@@ -150,7 +150,7 @@
           </div>
 
           <!-- Right: missing items panel -->
-          <div class="w-full lg:sticky lg:top-4 lg:w-72 shrink-0">
+          <div class="order-1 lg:order-2 w-full lg:sticky lg:top-4 lg:w-72 shrink-0">
             <div class="rounded-xl border bg-card shadow-sm">
               <div class="border-b px-4 py-3">
                 <p class="text-sm font-semibold">Ontbrekend</p>
