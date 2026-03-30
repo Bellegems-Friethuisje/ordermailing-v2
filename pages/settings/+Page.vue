@@ -11,16 +11,30 @@
         <h2 class="font-semibold">Appearance</h2>
         <p class="text-sm text-muted-foreground">Customize how the application looks.</p>
       </div>
-      <div class="px-6 py-5">
-        <div class="flex items-center justify-between">
+      <div class="divide-y px-6">
+        <div class="flex items-center justify-between py-5">
           <div>
             <p class="text-sm font-medium">Dark mode</p>
             <p class="text-xs text-muted-foreground">Switch between light and dark theme.</p>
           </div>
-          <Button variant="outline" size="icon" @click="toggleTheme" :aria-label="isDark ? 'Switch to light mode' : 'Switch to dark mode'">
+          <Button
+            variant="outline"
+            size="icon"
+            @click="toggleTheme"
+            :aria-label="isDark ? 'Switch to light mode' : 'Switch to dark mode'"
+          >
             <Sun v-if="isDark" class="size-4" />
             <Moon v-else class="size-4" />
           </Button>
+        </div>
+        <div class="flex items-center justify-between py-5">
+          <div>
+            <p class="text-sm font-medium">Nolan mode</p>
+            <p class="text-xs text-muted-foreground">
+              Swap the input field between amount to order and amount counted.
+            </p>
+          </div>
+          <Switch v-model="nolanMode" aria-label="Toggle Nolan mode" />
         </div>
       </div>
     </div>
@@ -104,9 +118,7 @@
           Imported <strong>{{ importSuccess.suppliers }}</strong> supplier{{
             importSuccess.suppliers !== 1 ? "s" : ""
           }}
-          and <strong>{{ importSuccess.products }}</strong> product{{
-            importSuccess.products !== 1 ? "s" : ""
-          }}
+          and <strong>{{ importSuccess.products }}</strong> product{{ importSuccess.products !== 1 ? "s" : "" }}
           successfully.
         </div>
       </div>
@@ -148,9 +160,12 @@
 import { ref } from "vue";
 import { FileJson, Upload, Loader2, CheckCircle, Sun, Moon } from "lucide-vue-next";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
 import { useTheme } from "@/lib/useTheme";
+import { useNolanMode } from "@/lib/useNolanMode";
 
 const { isDark, toggleTheme } = useTheme();
+const { nolanMode } = useNolanMode();
 import {
   Dialog,
   DialogContent,

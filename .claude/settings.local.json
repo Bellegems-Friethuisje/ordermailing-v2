@@ -3,7 +3,8 @@
     "allow": [
       "Bash(find /c/Users/Elias/Desktop/ordermailing/pages -type f -name *.tsx -o -name *.ts -o -name *.jsx -o -name *.js)",
       "Bash(bun add:*)",
-      "Bash(bun install:*)"
+      "Bash(bun install:*)",
+      "Bash(find /c/Users/Elias/Desktop/ordermailing/pages -type f ! -path */node_modules/*)"
     ]
   }
 }

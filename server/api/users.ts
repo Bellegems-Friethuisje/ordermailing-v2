@@ -126,6 +126,21 @@ users.post("/register", async (c) => {
   return c.json({ customToken });
 });
 
+// ─── GET /api/users/me ────────────────────────────────────────────────────────
+users.get("/me", async (c) => {
+  const uid = c.get("uid") as string;
+  const snap = await db.collection("users").doc(uid).get();
+  return c.json(snap.exists ? snap.data() : {});
+});
+
+// ─── PATCH /api/users/me/settings ────────────────────────────────────────────
+users.patch("/me/settings", async (c) => {
+  const uid = c.get("uid") as string;
+  const body = await c.req.json<Record<string, unknown>>();
+  await db.collection("users").doc(uid).set({ settings: body }, { merge: true });
+  return c.json({ ok: true });
+});
+
 // ─── PATCH /api/users/:id/role ───────────────────────────────────────────────
 users.patch("/:id/role", async (c) => {
   if (c.get("role") !== "admin") {

@@ -150,8 +150,12 @@
           <template v-if="product.manualOrder">
             <span class="font-semibold text-foreground">{{ orderQty(product) }}</span> worden besteld
           </template>
+          <template v-else-if="nolanMode">
+            <span class="font-semibold text-foreground">{{ orderQty(product) }}</span> worden besteld →
+            In stock geteld: <span class="font-semibold text-foreground">{{ countedQty(product) }}</span>
+          </template>
           <template v-else>
-            {{ product.manualOrder ? "In te vullen hoeveelheid" : "In stock geteld" }} →
+            In stock geteld →
             <span class="font-semibold text-foreground">{{ orderQty(product) }}</span> worden besteld
           </template>
         </p>
@@ -318,6 +322,7 @@ import {
 } from "@/components/ui/drawer";
 import { apiFetch } from "@/lib/apiFetch";
 import { useAuth } from "@/lib/useAuth";
+import { useNolanMode } from "@/lib/useNolanMode";
 
 const isDesktop = useMediaQuery("(min-width: 768px)");
 
@@ -341,6 +346,7 @@ interface Product {
 }
 
 const { loading: authLoading } = useAuth();
+const { nolanMode } = useNolanMode();
 
 // ─── Suppliers ────────────────────────────────────────────────────────────────
 const suppliers = ref<Supplier[]>([]);
@@ -389,10 +395,21 @@ const quantities = reactive<Record<string, number>>({});
 
 const filteredProducts = computed(() => products.value.filter((p) => p.isActive));
 
-/** For normal products: idealStock − counted (clamped ≥ 0). For manualOrder: direct input. */
+/**
+ * For manualOrder products: direct input.
+ * For normal products in Nolan mode: direct input (user enters order qty).
+ * For normal products default: idealStock − counted (clamped ≥ 0).
+ */
 function orderQty(product: Product): number {
   const val = quantities[product.id] ?? 0;
-  return product.manualOrder ? val : Math.max(0, product.idealStock - val);
+  if (product.manualOrder || nolanMode.value) return val;
+  return Math.max(0, product.idealStock - val);
+}
+
+/** The amount counted in stock, derived from the input (only meaningful in Nolan mode for non-manual products). */
+function countedQty(product: Product): number {
+  const val = quantities[product.id] ?? 0;
+  return Math.max(0, product.idealStock - val);
 }
 
 const orderLines = computed(() =>
@@ -605,14 +622,15 @@ async function tryRestoreDraft() {
 
     if (draft.lines && draft.lines.length > 0) {
       // Restore from lines (coming from the orders list page).
-      // Convert order qty → counted stock:
-      //   manualOrder  → counted = order qty (direct input)
-      //   normal       → counted = idealStock − order qty
+      // Convert order qty → input value depending on mode:
+      //   manualOrder or Nolan mode → input = order qty (direct)
+      //   normal mode               → input = counted = idealStock − order qty
       const lineMap = new Map(draft.lines.map((l) => [l.productId, l.quantity]));
       for (const p of products.value) {
         if (!(p.id in quantities)) continue;
         const orderQtyVal = lineMap.get(p.id) ?? 0;
-        quantities[p.id] = p.manualOrder ? orderQtyVal : Math.max(0, p.idealStock - orderQtyVal);
+        quantities[p.id] =
+          p.manualOrder || nolanMode.value ? orderQtyVal : Math.max(0, p.idealStock - orderQtyVal);
       }
     } else {
       // Restore from quantities (saved mid-session by autosave)
@@ -686,20 +704,20 @@ async function pickSupplier(supplier: Supplier, skipDbCreate = false) {
   startSyncTimer();
 }
 
-function maxCounted(productId: string): number {
+function maxInput(productId: string): number {
   const p = products.value.find((p) => p.id === productId);
   return p && !p.manualOrder ? p.idealStock : Infinity;
 }
 
 function adjust(productId: string, delta: number) {
   const cur = quantities[productId] ?? 0;
-  quantities[productId] = Math.min(Math.max(0, cur + delta), maxCounted(productId));
+  quantities[productId] = Math.min(Math.max(0, cur + delta), maxInput(productId));
   onQuantityChange();
 }
 
 function setQty(productId: string, val: number) {
   const clamped = isNaN(val) || val < 0 ? 0 : val;
-  quantities[productId] = Math.min(clamped, maxCounted(productId));
+  quantities[productId] = Math.min(clamped, maxInput(productId));
   onQuantityChange();
 }
 
