@@ -45,7 +45,7 @@
 
       <!-- Controls -->
       <div class="flex flex-wrap items-center gap-4">
-        <div class="relative flex-1 min-w-[200px]">
+        <div class="relative flex-1 min-w-50">
           <Search class="absolute left-2.5 top-2.5 size-4 text-muted-foreground" />
           <input
             type="text"
@@ -111,16 +111,21 @@
                   <a v-if="res.email" :href="'mailto:' + res.email" class="hover:text-primary">
                     <Mail class="size-4" />
                   </a>
-                  <span class="truncate max-w-[120px]">{{ res.email || '—' }}</span>
+                  <span class="truncate max-w-30">{{ res.email || '—' }}</span>
                 </div>
               </td>
               <td class="px-4 py-3 text-muted-foreground max-w-xs truncate" :title="res.notes">
                 {{ res.notes || '—' }}
               </td>
               <td class="px-4 py-3 text-right">
-                <Button variant="ghost" size="icon" @click="confirmDelete(res)">
-                  <Trash2 class="size-4 text-muted-foreground hover:text-destructive" />
-                </Button>
+                <div class="flex items-center justify-end gap-1">
+                  <Button variant="ghost" size="icon" @click="openEdit(res)">
+                    <Pencil class="size-4 text-muted-foreground hover:text-foreground" />
+                  </Button>
+                  <Button variant="ghost" size="icon" @click="confirmDelete(res)">
+                    <Trash2 class="size-4 text-muted-foreground hover:text-destructive" />
+                  </Button>
+                </div>
               </td>
             </tr>
           </tbody>
@@ -160,6 +165,51 @@
     </DialogContent>
   </Dialog>
 
+  <!-- Edit Reservation Dialog -->
+  <Dialog v-model:open="editOpen">
+    <DialogContent class="sm:max-w-md">
+      <DialogHeader>
+        <DialogTitle>Reservatie bewerken</DialogTitle>
+        <DialogDescription>Pas de gegevens van deze reservatie aan.</DialogDescription>
+      </DialogHeader>
+      <div class="grid gap-4 py-4">
+        <div class="grid gap-2">
+          <label for="edit-name" class="text-sm font-medium">Naam</label>
+          <Input id="edit-name" v-model="editReservation.name" placeholder="Naam klant" />
+        </div>
+        <div class="grid gap-2">
+          <label for="edit-email" class="text-sm font-medium">Email</label>
+          <Input id="edit-email" v-model="editReservation.email" type="email" placeholder="naam@example.com" />
+        </div>
+        <div class="grid gap-2">
+          <label for="edit-date" class="text-sm font-medium">Datum & Tijd</label>
+          <Input id="edit-date" type="datetime-local" v-model="editReservation.date" />
+        </div>
+        <div class="grid gap-2">
+          <label for="edit-quantity" class="text-sm font-medium">Aantal personen</label>
+          <Input id="edit-quantity" type="number" v-model="editReservation.quantity" :min="1" />
+        </div>
+        <div class="grid gap-2">
+          <label for="edit-notes" class="text-sm font-medium">Notities</label>
+          <textarea
+            id="edit-notes"
+            v-model="editReservation.notes"
+            rows="4"
+            class="min-h-24 rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            placeholder="Extra info of opmerkingen"
+          />
+        </div>
+      </div>
+      <DialogFooter>
+        <Button variant="outline" @click="editOpen = false">Annuleren</Button>
+        <Button :disabled="editing || !isValidEdit" @click="doEdit">
+          <Loader2 v-if="editing" class="mr-2 size-4 animate-spin" />
+          Opslaan
+        </Button>
+      </DialogFooter>
+    </DialogContent>
+  </Dialog>
+
   <!-- Delete confirm Dialog -->
   <Dialog v-model:open="deleteOpen">
     <DialogContent class="sm:max-w-md">
@@ -182,7 +232,7 @@
 
 <script setup lang="ts">
 import { ref, watch, computed } from "vue";
-import { Trash2, Loader2, Search, Mail, Calendar, ChevronLeft, ChevronRight, PlusCircle } from "lucide-vue-next";
+import { Trash2, Loader2, Search, Mail, Pencil, ChevronLeft, ChevronRight, PlusCircle } from "lucide-vue-next";
 import TopLoader from "@/components/ui/top-loader/TopLoader.vue";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -198,9 +248,30 @@ import {
 import { apiFetch } from "@/lib/apiFetch";
 import { useAuth } from "@/lib/useAuth";
 
+interface Reservation {
+  id: string;
+  name: string;
+  email: string;
+  date: string;
+  quantity: number;
+  notes: string;
+  createdAt?: string;
+  updatedAt?: string;
+  status?: string;
+}
+
+interface ReservationForm {
+  id: string;
+  name: string;
+  email: string;
+  date: string;
+  quantity: number;
+  notes: string;
+}
+
 const { loading: authLoading } = useAuth();
 const loading = ref(true);
-const allReservations = ref<any[]>([]);
+const allReservations = ref<Reservation[]>([]);
 
 // ─── Create State ────────────────────────────────────────────────────────────
 const createOpen = ref(false);
@@ -238,6 +309,16 @@ async function doCreate() {
 // ─── Filters State ───────────────────────────────────────────────────────────
 const searchQuery = ref("");
 const selectedDate = ref(formatDateKey(new Date()));
+const editOpen = ref(false);
+const editing = ref(false);
+const editReservation = ref<ReservationForm>({
+  id: "",
+  name: "",
+  email: "",
+  date: "",
+  quantity: 1,
+  notes: "",
+});
 
 // ─── Computed ────────────────────────────────────────────────────────────────
 const isToday = computed(() => selectedDate.value === formatDateKey(new Date()));
@@ -270,6 +351,10 @@ const filteredStats = computed(() => {
   return { count, persons };
 });
 
+const isValidEdit = computed(() => {
+  return !!editReservation.value.name && !!editReservation.value.date && editReservation.value.quantity >= 1;
+});
+
 function calculateStats(dateKey: string) {
   const dayRes = allReservations.value.filter(r => r.date.startsWith(dateKey));
   return {
@@ -288,7 +373,7 @@ async function fetchReservations() {
   loading.value = true;
   try {
     const res = await apiFetch("/api/reservations");
-    allReservations.value = (await res.json());
+    allReservations.value = (await res.json()) as Reservation[];
   } catch (err) {
     console.error("Failed to fetch reservations:", err);
   } finally {
@@ -296,9 +381,62 @@ async function fetchReservations() {
   }
 }
 
+function openEdit(reservation: Reservation) {
+  editReservation.value = {
+    id: reservation.id,
+    name: reservation.name,
+    email: reservation.email || "",
+    date: toDateTimeLocalValue(reservation.date),
+    quantity: reservation.quantity,
+    notes: reservation.notes || "",
+  };
+  editOpen.value = true;
+}
+
+async function doEdit() {
+  if (!isValidEdit.value) return;
+  editing.value = true;
+  try {
+    const payload = {
+      name: editReservation.value.name,
+      email: editReservation.value.email,
+      date: new Date(editReservation.value.date).toISOString(),
+      quantity: editReservation.value.quantity,
+      notes: editReservation.value.notes,
+    };
+
+    const res = await apiFetch(`/api/reservations/${editReservation.value.id}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    });
+
+    if (!res.ok) {
+      throw new Error(`Failed to update reservation: ${res.status}`);
+    }
+
+    const updated = (await res.json()) as Reservation;
+    allReservations.value = allReservations.value.map((reservation) =>
+      reservation.id === updated.id ? { ...reservation, ...updated } : reservation,
+    );
+    editOpen.value = false;
+  } catch (err) {
+    console.error("Failed to update reservation:", err);
+  } finally {
+    editing.value = false;
+  }
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 function formatDateKey(date: Date) {
   return date.toISOString().split('T')[0];
+}
+
+function toDateTimeLocalValue(iso: string) {
+  if (!iso) return "";
+  const date = new Date(iso);
+  const offset = date.getTimezoneOffset();
+  const localDate = new Date(date.getTime() - offset * 60_000);
+  return localDate.toISOString().slice(0, 16);
 }
 
 function formatTime(iso: string) {
@@ -327,10 +465,10 @@ function formatDateRelative(iso: string) {
 }
 
 const deleteOpen = ref(false);
-const deleteTarget = ref<any>(null);
+const deleteTarget = ref<Reservation | null>(null);
 const deleting = ref(false);
 
-function confirmDelete(res: any) {
+function confirmDelete(res: Reservation) {
   deleteTarget.value = res;
   deleteOpen.value = true;
 }

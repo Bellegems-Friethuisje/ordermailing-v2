@@ -10,6 +10,14 @@ const PHONE_NUMBER = process.env.SHOP_PHONE || "+32 470 00 00 00";
 
 const reservations = new Hono();
 
+type ReservationPayload = {
+  name: string;
+  email?: string;
+  date: string;
+  quantity: number;
+  notes?: string;
+};
+
 const mailTransporter = nodemailer.createTransport({
   service: "gmail",
   auth: {
@@ -197,11 +205,38 @@ reservations.patch("/:id/status", authMiddleware, async (c) => {
   return c.json({ ok: true });
 });
 
+// ─── PATCH /api/reservations/:id (Protected) ──────────────────────────────────
+reservations.patch("/:id", authMiddleware, async (c) => {
+  const id = c.req.param("id");
+  const { name, email, date, quantity, notes } = await c.req.json<ReservationPayload>();
+
+  if (!name || !date || !quantity) {
+    throw new HTTPException(400, { message: "Name, date and quantity are required" });
+  }
+
+  if (quantity < 1) {
+    throw new HTTPException(400, { message: "Quantity must be at least 1" });
+  }
+
+  const update = {
+    name,
+    email: email || "",
+    date,
+    quantity,
+    notes: notes || "",
+    updatedAt: new Date().toISOString(),
+  };
+
+  await db.collection("reservations").doc(id).update(update);
+
+  return c.json({ id, ...update });
+});
+
 // ─── POST /api/reservations/subscribe (Protected) ────────────────────────────
 reservations.post("/subscribe", authMiddleware, async (c) => {
   const { token } = await c.req.json<{ token: string }>();
-  const uid = c.get("uid");
-  const role = c.get("role");
+  const uid = (c as any).get("uid");
+  const role = (c as any).get("role");
 
   if (!token) {
     throw new HTTPException(400, { message: "Token is required" });
