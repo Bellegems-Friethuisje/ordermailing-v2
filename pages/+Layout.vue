@@ -7,7 +7,7 @@
   </template>
 
   <!-- Authenticated layout with sidebar -->
-  <SidebarProvider v-else class="h-svh">
+  <SidebarProvider v-else-if="!loading" class="h-svh">
     <Sidebar collapsible="icon">
       <SidebarHeader>
         <SidebarMenu>
@@ -208,21 +208,40 @@ import { useTheme } from "@/lib/useTheme";
 sentryBrowserConfig();
 
 const pageContext = usePageContext();
-const { currentUser, loading, signOut } = useAuth();
+const { currentUser, userRole, loading, signOut } = useAuth();
 const { initTheme } = useTheme();
 
-// ─── Auth guard ───────────────────────────────────────────────────────────────
-// Once Firebase resolves auth state, redirect unauthenticated users to /login.
+// ─── Auth guard & Role-based Redirection ──────────────────────────────────────
 const PUBLIC_PATHS = ["/login", "/register"];
-
 const isPublicPage = computed(() => PUBLIC_PATHS.some((p) => pageContext.urlPathname.startsWith(p)));
 
-watch(loading, (isLoading) => {
+watch([loading, userRole], ([isLoading, role]) => {
   if (isLoading || typeof window === "undefined") return;
   const path = window.location.pathname;
-  if (!currentUser.value && !PUBLIC_PATHS.some((p) => path.startsWith(p))) {
-    sessionStorage.setItem("intended_url", path);
-    window.location.href = "/login";
+
+  if (!currentUser.value) {
+    if (!PUBLIC_PATHS.some((p) => path.startsWith(p))) {
+      sessionStorage.setItem("intended_url", path);
+      window.location.href = "/login";
+    }
+    return;
+  }
+
+  // Role-based redirection logic
+
+  if (role === "kassa") {
+    if (path !== "/reservations") {
+      window.location.href = "/reservations";
+    }
+  } else if (role === "user") {
+    // Prevent standard users from accessing restricted areas (optional but safer)
+    const allowedForUser = ["/", "/orders/new", "/orders", "/reservations", "/automaten", "/settings"];
+    const isRestricted = !allowedForUser.some(
+      (allowed) => path === allowed || (allowed !== "/" && path.startsWith(allowed)),
+    );
+    if (isRestricted) {
+      window.location.href = "/";
+    }
   }
 });
 
@@ -243,7 +262,7 @@ const avatarInitials = computed(() => {
     .join("");
 });
 
-const nav = [
+const allNav = [
   { label: "Home", url: "/", icon: Home },
   { label: "Create order", url: "/orders/new", icon: PlusCircle },
   { label: "Orders", url: "/orders", icon: ClipboardList },
@@ -255,7 +274,20 @@ const nav = [
   { label: "Design Editor", url: "/design", icon: PenTool },
 ];
 
-const beheerNav = [{ label: "Users", url: "/users", icon: Users }];
+const nav = computed(() => {
+  const role = userRole.value?.toLowerCase();
+  if (role === "admin") return allNav;
+  if (role === "kassa") return [{ label: "Reservaties", url: "/reservations", icon: Calendar }];
+
+  // Standard user: Home, Create order, Orders, Reservaties, Automaten
+  const allowedLabels = ["Home", "Create order", "Orders", "Reservaties", "Automaten"];
+  return allNav.filter((item) => allowedLabels.includes(item.label));
+});
+
+const beheerNav = computed(() => {
+  if (userRole.value?.toLowerCase() === "admin") return [{ label: "Users", url: "/users", icon: Users }];
+  return [];
+});
 
 // ─── Resume draft ─────────────────────────────────────────────────────────────
 const resumeOpen = ref(false);

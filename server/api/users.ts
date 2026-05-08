@@ -150,8 +150,8 @@ users.patch("/:id/role", async (c) => {
   const id = c.req.param("id");
   const { role } = await c.req.json<{ role: string }>();
 
-  if (role !== "admin" && role !== "user") {
-    throw new HTTPException(400, { message: "Role must be 'admin' or 'user'" });
+  if (role !== "admin" && role !== "user" && role !== "kassa") {
+    throw new HTTPException(400, { message: "Role must be 'admin', 'user' or 'kassa'" });
   }
 
   await db.collection("users").doc(id).update({ role });
