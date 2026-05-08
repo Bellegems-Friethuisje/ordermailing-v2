@@ -25,22 +25,36 @@
 import { ref, onMounted } from "vue";
 import { Bell, BellRing, BellOff } from "lucide-vue-next";
 import { Button } from "@/components/ui/button";
-import { getMessaging, getToken } from "firebase/messaging";
-import { auth } from "@/lib/firebase";
+import { getMessaging, getToken, isSupported, onMessage } from "firebase/messaging";
 import { apiFetch } from "@/lib/apiFetch";
 
 const supported = ref(false);
 const permission = ref<NotificationPermission>("default");
+const vapidKey = import.meta.env.PUBLIC_ENV__FIREBASE_VAPID_KEY as string | undefined;
 
-onMounted(() => {
-  if ("Notification" in window) {
-    supported.value = true;
-    permission.value = Notification.permission;
-    
-    // If already granted, ensure token is up to date
-    if (permission.value === "granted") {
-      syncToken();
-    }
+onMounted(async () => {
+  const messagingSupported = await isSupported().catch(() => false);
+  supported.value = messagingSupported && "Notification" in window && "serviceWorker" in navigator;
+
+  if (!supported.value) {
+    return;
+  }
+
+  permission.value = Notification.permission;
+
+  const messaging = getMessaging();
+  onMessage(messaging, (payload) => {
+    const title = payload.notification?.title;
+    if (!title || Notification.permission !== "granted") return;
+
+    new Notification(title, {
+      body: payload.notification?.body,
+      icon: "/icon.svg",
+    });
+  });
+
+  if (permission.value === "granted") {
+    await syncToken();
   }
 });
 
@@ -54,9 +68,13 @@ async function requestPermission() {
 
 async function syncToken() {
   try {
+    if (!supported.value) return;
+
     const messaging = getMessaging();
+    const serviceWorkerRegistration = await navigator.serviceWorker.register("/firebase-messaging-sw.js");
     const token = await getToken(messaging, {
-      vapidKey: "BH53V... (I should probably use a real one if needed, but Firebase usually handles this if configured)",
+      serviceWorkerRegistration,
+      ...(vapidKey ? { vapidKey } : {}),
     });
 
     if (token) {
