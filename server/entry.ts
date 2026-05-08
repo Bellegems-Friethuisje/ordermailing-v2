@@ -1,6 +1,7 @@
 import { sentryServerConfig } from "./sentry.server.config";
 import { apply, serve } from "@photonjs/hono";
 import { Hono } from "hono";
+import { cors } from "hono/cors";
 import * as Sentry from "@sentry/node";
 import { usersRouter } from "./api/users";
 import { suppliersRouter } from "./api/suppliers";
@@ -12,11 +13,30 @@ import { reservationsRouter } from "./api/reservations";
 sentryServerConfig();
 
 const port = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
+const allowedOrigins = new Set([
+  "https://bellegemsfriethuisje.be",
+  "https://www.bellegemsfriethuisje.be",
+  "http://localhost:3000",
+  "http://localhost:4173",
+  "http://localhost:5173",
+]);
 
 export default startApp() as unknown;
 
 function startApp() {
   const app = new Hono();
+
+  app.use(
+    "/api/*",
+    cors({
+      origin: (origin) => {
+        if (!origin) return null;
+        return allowedOrigins.has(origin) ? origin : null;
+      },
+      allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+      allowHeaders: ["Content-Type", "Authorization"],
+    }),
+  );
 
   app.get("/api/sentry-test", (c) => {
     try {
