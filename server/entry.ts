@@ -7,6 +7,7 @@ import { suppliersRouter } from "./api/suppliers";
 import { ordersRouter } from "./api/orders";
 import { automatenRouter } from "./api/automaten";
 import { designsRouter } from "./api/designs";
+import { reservationsRouter } from "./api/reservations";
 
 sentryServerConfig();
 
@@ -31,6 +32,7 @@ function startApp() {
   app.route("/api/orders", ordersRouter);
   app.route("/api/automaten", automatenRouter);
   app.route("/api/designs", designsRouter);
+  app.route("/api/reservations", reservationsRouter);
 
   apply(app, []);
 

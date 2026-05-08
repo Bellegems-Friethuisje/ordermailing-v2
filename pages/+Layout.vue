@@ -64,6 +64,7 @@
       </SidebarContent>
 
       <SidebarFooter>
+        <NotificationSettings />
         <SidebarMenu>
           <SidebarMenuItem>
             <DropdownMenu>
@@ -159,7 +160,9 @@ import {
   ClipboardList,
   Film,
   PenTool,
+  Calendar,
 } from "lucide-vue-next";
+import NotificationSettings from "@/components/NotificationSettings.vue";
 import {
   Sidebar,
   SidebarContent,
@@ -244,6 +247,7 @@ const nav = [
   { label: "Home", url: "/", icon: Home },
   { label: "Create order", url: "/orders/new", icon: PlusCircle },
   { label: "Orders", url: "/orders", icon: ClipboardList },
+  { label: "Reservaties", url: "/reservations", icon: Calendar },
   { label: "Suppliers", url: "/suppliers", icon: Truck },
   { label: "History", url: "/history", icon: History },
   { label: "Automaten", url: "/automaten", icon: Bot },
