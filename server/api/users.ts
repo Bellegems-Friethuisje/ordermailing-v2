@@ -5,6 +5,27 @@ import { randomUUID } from "crypto";
 
 const users = new Hono();
 
+type UserListItem = {
+  id: string;
+  name: string;
+  email: string;
+  role: string;
+  createdAt: string;
+};
+
+async function listAllAuthUsers() {
+  const allUsers = [];
+  let pageToken: string | undefined;
+
+  do {
+    const page = await adminAuth.listUsers(1000, pageToken);
+    allUsers.push(...page.users);
+    pageToken = page.pageToken;
+  } while (pageToken);
+
+  return allUsers;
+}
+
 // ─── Auth middleware ──────────────────────────────────────────────────────────
 users.use("*", async (c, next) => {
   // Public routes: validate invite token + register
@@ -37,8 +58,37 @@ users.use("*", async (c, next) => {
 
 // ─── GET /api/users ───────────────────────────────────────────────────────────
 users.get("/", async (c) => {
-  const snapshot = await db.collection("users").orderBy("createdAt", "desc").get();
-  const list = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+  const [snapshot, authUsers] = await Promise.all([db.collection("users").get(), listAllAuthUsers()]);
+
+  const usersById = new Map<string, UserListItem>();
+
+  for (const authUser of authUsers) {
+    usersById.set(authUser.uid, {
+      id: authUser.uid,
+      name: authUser.displayName ?? authUser.email ?? "Unknown user",
+      email: authUser.email ?? "",
+      role: "user",
+      createdAt: authUser.metadata.creationTime ? new Date(authUser.metadata.creationTime).toISOString() : "",
+    });
+  }
+
+  for (const doc of snapshot.docs) {
+    const data = doc.data();
+    const existing = usersById.get(doc.id);
+
+    usersById.set(doc.id, {
+      id: doc.id,
+      name: typeof data.name === "string" && data.name ? data.name : existing?.name ?? data.email ?? "Unknown user",
+      email: typeof data.email === "string" ? data.email : existing?.email ?? "",
+      role: typeof data.role === "string" && data.role ? data.role : existing?.role ?? "user",
+      createdAt:
+        typeof data.createdAt === "string" && data.createdAt
+          ? data.createdAt
+          : existing?.createdAt ?? new Date(0).toISOString(),
+    });
+  }
+
+  const list = [...usersById.values()].sort((left, right) => right.createdAt.localeCompare(left.createdAt));
   return c.json(list);
 });
 

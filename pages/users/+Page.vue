@@ -161,14 +161,14 @@ interface AppUser {
   id: string;
   name: string;
   email: string;
-  role: "admin" | "user";
+  role: "admin" | "user" | "kassa";
   createdAt: string;
 }
 
 const { currentUser, loading: authLoading } = useAuth();
 const isDesktop = useMediaQuery("(min-width: 768px)");
 
-const roles = ["admin", "user"] as const;
+const roles = ["admin", "user", "kassa"] as const;
 type Role = (typeof roles)[number];
 
 const users = ref<AppUser[]>([]);
@@ -266,6 +266,7 @@ async function executeDelete() {
 }
 
 function formatDate(iso: string) {
+  if (!iso) return "-";
   return new Date(iso).toLocaleDateString("nl-NL", {
     day: "2-digit",
     month: "short",
