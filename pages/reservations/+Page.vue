@@ -17,29 +17,117 @@
 
       <!-- Navigation & Date Controls -->
       <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div class="flex items-center gap-2">
-          <Button variant="outline" size="sm" @click="selectedDate = formatDateKey(new Date())" :class="{ 'bg-primary text-primary-foreground': isToday }">
+        <div class="flex flex-col items-stretch gap-2 sm:flex-row sm:items-center">
+          <Button
+            variant="outline"
+            size="sm"
+            @click="selectedDate = formatDateKey(new Date())"
+            class="justify-center sm:justify-start"
+            :class="{ 'bg-primary text-primary-foreground': isToday }"
+          >
             Vandaag
           </Button>
-          <Button variant="outline" size="sm" @click="selectedDate = formatDateKey(new Date(Date.now() + 86400000))" :class="{ 'bg-primary text-primary-foreground': isTomorrow }">
+          <Button
+            variant="outline"
+            size="sm"
+            @click="selectedDate = formatDateKey(new Date(Date.now() + 86400000))"
+            class="justify-center sm:justify-start"
+            :class="{ 'bg-primary text-primary-foreground': isTomorrow }"
+          >
             Morgen
           </Button>
-          <div class="flex items-center gap-1 ml-2">
+          <div class="flex w-full items-center gap-1 sm:ml-2 sm:w-auto">
             <Button variant="outline" size="icon" class="size-9" @click="adjustDate(-1)">
               <ChevronLeft class="size-4" />
             </Button>
-            <input
-              type="date"
-              v-model="selectedDate"
-              class="h-9 w-40 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-            />
+            <div class="relative flex-1 sm:flex-none">
+              <Button
+                variant="outline"
+                class="w-full justify-between px-3 font-normal sm:w-52"
+                :class="!selectedDate && 'text-muted-foreground'"
+                @click="showDatePicker = !showDatePicker"
+              >
+                <span>{{ selectedDate ? formatDateLong(selectedDate) : "Kies een datum" }}</span>
+                <CalendarDays class="ml-2 size-4 shrink-0" />
+              </Button>
+
+              <button
+                v-if="showDatePicker"
+                type="button"
+                class="fixed inset-0 z-30 bg-background/80 backdrop-blur-sm sm:hidden"
+                aria-label="Sluit datumkiezer"
+                @click="showDatePicker = false"
+              />
+
+              <div
+                v-if="showDatePicker"
+                class="fixed inset-x-4 top-20 z-40 rounded-xl border bg-popover p-4 text-popover-foreground shadow-lg sm:absolute sm:left-0 sm:top-11 sm:z-20 sm:w-88"
+              >
+                <div class="mb-4 flex items-center justify-between gap-2">
+                  <Button variant="ghost" size="icon" class="size-8 shrink-0" @click="changeVisibleMonth(-1)">
+                    <ChevronLeft class="size-4" />
+                  </Button>
+                  <div class="min-w-0 flex-1 text-center text-sm font-semibold capitalize">
+                    {{ visibleMonthLabel }}
+                  </div>
+                  <Button variant="ghost" size="icon" class="size-8 shrink-0" @click="changeVisibleMonth(1)">
+                    <ChevronRight class="size-4" />
+                  </Button>
+                </div>
+
+                <div class="mb-2 grid grid-cols-7 gap-1 text-center text-xs font-medium text-muted-foreground">
+                  <div v-for="weekday in weekdays" :key="weekday">{{ weekday }}</div>
+                </div>
+
+                <div class="grid grid-cols-7 gap-1">
+                  <button
+                    v-for="day in calendarDays"
+                    :key="day.key"
+                    type="button"
+                    class="relative flex aspect-square flex-col items-center justify-center rounded-lg text-sm transition-colors"
+                    :class="[
+                      day.isCurrentMonth ? 'text-foreground hover:bg-accent' : 'text-muted-foreground/40',
+                      day.isSelected ? 'bg-primary text-primary-foreground hover:bg-primary' : '',
+                      day.isToday && !day.isSelected ? 'ring-1 ring-primary/40' : '',
+                    ]"
+                    @click="selectCalendarDate(day.dateKey)"
+                  >
+                    <span>{{ day.label }}</span>
+                    <span
+                      v-if="day.hasReservations"
+                      class="mt-1 size-1.5 rounded-full"
+                      :class="day.isSelected ? 'bg-primary-foreground/90' : 'bg-emerald-500'"
+                    />
+                  </button>
+                </div>
+
+                <div
+                  class="mt-4 flex flex-col gap-3 border-t pt-3 text-xs text-muted-foreground sm:flex-row sm:items-center sm:justify-between"
+                >
+                  <div class="flex items-center gap-2">
+                    <span class="size-2 rounded-full bg-emerald-500" />
+                    <span>Reservatie aanwezig</span>
+                  </div>
+                  <div class="flex items-center justify-between gap-2 sm:justify-end">
+                    <Button variant="ghost" size="sm" class="h-7 px-2 text-xs" @click="goToTodayInPicker">
+                      Vandaag
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      class="h-7 px-2 text-xs sm:hidden"
+                      @click="showDatePicker = false"
+                    >
+                      Sluiten
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            </div>
             <Button variant="outline" size="icon" class="size-9" @click="adjustDate(1)">
               <ChevronRight class="size-4" />
             </Button>
           </div>
-          <Button variant="ghost" size="sm" @click="selectedDate = ''" v-if="selectedDate" title="Toon alle datums">
-            Wis
-          </Button>
         </div>
       </div>
 
@@ -75,12 +163,58 @@
         </Card>
       </div>
 
+      <div v-if="!loading && filteredReservations.length === 0" class="py-16 text-center text-sm text-muted-foreground">
+        Geen reservaties gevonden voor deze criteria.
+      </div>
+
+      <!-- Mobile cards -->
+      <div v-else class="grid gap-3 sm:hidden">
+        <Card v-for="res in filteredReservations" :key="res.id" class="p-4 shadow-sm">
+          <div class="flex items-start justify-between gap-3">
+            <div class="min-w-0">
+              <div class="font-medium">{{ res.name }}</div>
+              <div class="text-xs text-muted-foreground">{{ formatDateRelative(res.date) }}</div>
+            </div>
+            <div class="flex items-center gap-1">
+              <Button variant="ghost" size="icon" class="size-8" @click="openEdit(res)">
+                <Pencil class="size-4 text-muted-foreground hover:text-foreground" />
+              </Button>
+              <Button variant="ghost" size="icon" class="size-8" @click="confirmDelete(res)">
+                <Trash2 class="size-4 text-muted-foreground hover:text-destructive" />
+              </Button>
+            </div>
+          </div>
+
+          <div class="mt-4 grid grid-cols-2 gap-3 text-sm">
+            <div>
+              <div class="text-xs uppercase text-muted-foreground">Tijd</div>
+              <div class="font-semibold">{{ formatTime(res.date) }}</div>
+              <div class="text-muted-foreground">{{ formatDateShort(res.date) }}</div>
+            </div>
+            <div>
+              <div class="text-xs uppercase text-muted-foreground">Personen</div>
+              <div class="font-semibold">{{ res.quantity }}</div>
+            </div>
+            <div class="col-span-2">
+              <div class="text-xs uppercase text-muted-foreground">Contact</div>
+              <div class="mt-1 flex items-center gap-2 text-muted-foreground">
+                <a v-if="res.email" :href="'mailto:' + res.email" class="hover:text-primary">
+                  <Mail class="size-4" />
+                </a>
+                <span class="truncate">{{ res.email || "—" }}</span>
+              </div>
+            </div>
+            <div class="col-span-2">
+              <div class="text-xs uppercase text-muted-foreground">Notities</div>
+              <div class="mt-1 text-muted-foreground">{{ res.notes || "—" }}</div>
+            </div>
+          </div>
+        </Card>
+      </div>
+
       <!-- Desktop table -->
-      <div class="rounded-lg border overflow-hidden bg-card shadow-sm">
-        <div v-if="!loading && filteredReservations.length === 0" class="py-16 text-center text-sm text-muted-foreground">
-          Geen reservaties gevonden voor deze criteria.
-        </div>
-        <table v-else class="w-full text-sm">
+      <div class="hidden overflow-hidden rounded-lg border bg-card shadow-sm sm:block">
+        <table class="w-full text-sm">
           <thead class="bg-muted/50">
             <tr>
               <th class="px-4 py-3 text-left font-medium text-muted-foreground">Naam</th>
@@ -111,11 +245,11 @@
                   <a v-if="res.email" :href="'mailto:' + res.email" class="hover:text-primary">
                     <Mail class="size-4" />
                   </a>
-                  <span class="truncate max-w-30">{{ res.email || '—' }}</span>
+                  <span class="truncate max-w-30">{{ res.email || "—" }}</span>
                 </div>
               </td>
               <td class="px-4 py-3 text-muted-foreground max-w-xs truncate" :title="res.notes">
-                {{ res.notes || '—' }}
+                {{ res.notes || "—" }}
               </td>
               <td class="px-4 py-3 text-right">
                 <div class="flex items-center justify-end gap-1">
@@ -232,7 +366,17 @@
 
 <script setup lang="ts">
 import { ref, watch, computed } from "vue";
-import { Trash2, Loader2, Search, Mail, Pencil, ChevronLeft, ChevronRight, PlusCircle } from "lucide-vue-next";
+import {
+  Trash2,
+  Loader2,
+  Search,
+  Mail,
+  Pencil,
+  ChevronLeft,
+  ChevronRight,
+  PlusCircle,
+  CalendarDays,
+} from "lucide-vue-next";
 import TopLoader from "@/components/ui/top-loader/TopLoader.vue";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -267,6 +411,16 @@ interface ReservationForm {
   date: string;
   quantity: number;
   notes: string;
+}
+
+interface CalendarDay {
+  key: string;
+  label: number;
+  dateKey: string;
+  isCurrentMonth: boolean;
+  isSelected: boolean;
+  isToday: boolean;
+  hasReservations: boolean;
 }
 
 const { loading: authLoading } = useAuth();
@@ -309,6 +463,8 @@ async function doCreate() {
 // ─── Filters State ───────────────────────────────────────────────────────────
 const searchQuery = ref("");
 const selectedDate = ref(formatDateKey(new Date()));
+const showDatePicker = ref(false);
+const visibleMonth = ref(startOfMonth(new Date()));
 const editOpen = ref(false);
 const editing = ref(false);
 const editReservation = ref<ReservationForm>({
@@ -323,24 +479,61 @@ const editReservation = ref<ReservationForm>({
 // ─── Computed ────────────────────────────────────────────────────────────────
 const isToday = computed(() => selectedDate.value === formatDateKey(new Date()));
 const isTomorrow = computed(() => selectedDate.value === formatDateKey(new Date(Date.now() + 86400000)));
+const weekdays = ["Ma", "Di", "Wo", "Do", "Vr", "Za", "Zo"];
+
+const reservationDateSet = computed(() => {
+  return new Set(allReservations.value.map((reservation) => formatDateKey(new Date(reservation.date))));
+});
+
+const visibleMonthLabel = computed(() => {
+  return visibleMonth.value.toLocaleDateString("nl-NL", { month: "long", year: "numeric" });
+});
+
+const calendarDays = computed<CalendarDay[]>(() => {
+  const monthStart = startOfMonth(visibleMonth.value);
+  const monthEnd = endOfMonth(visibleMonth.value);
+  const startWeekdayOffset = (monthStart.getDay() + 6) % 7;
+  const days: CalendarDay[] = [];
+  const gridStart = new Date(monthStart);
+  gridStart.setDate(monthStart.getDate() - startWeekdayOffset);
+
+  for (let index = 0; index < 42; index += 1) {
+    const date = new Date(gridStart);
+    date.setDate(gridStart.getDate() + index);
+    const dateKey = formatDateKey(date);
+    days.push({
+      key: `${dateKey}-${index}`,
+      label: date.getDate(),
+      dateKey,
+      isCurrentMonth: date >= monthStart && date <= monthEnd,
+      isSelected: selectedDate.value === dateKey,
+      isToday: formatDateKey(new Date()) === dateKey,
+      hasReservations: reservationDateSet.value.has(dateKey),
+    });
+  }
+
+  return days;
+});
 
 const filteredReservations = computed(() => {
-  return allReservations.value.filter(res => {
-    // Date filter
-    if (selectedDate.value) {
-      if (!res.date.startsWith(selectedDate.value)) return false;
-    }
-    
-    // Search filter
-    if (searchQuery.value) {
-      const q = searchQuery.value.toLowerCase();
-      const matchName = res.name?.toLowerCase().includes(q);
-      const matchEmail = res.email?.toLowerCase().includes(q);
-      if (!matchName && !matchEmail) return false;
-    }
-    
-    return true;
-  }).sort((a, b) => a.date.localeCompare(b.date)); // Sort by time within the day
+  return allReservations.value
+    .filter((res) => {
+      // Date filter
+      if (selectedDate.value) {
+        if (!res.date.startsWith(selectedDate.value)) return false;
+      }
+
+      // Search filter
+      if (searchQuery.value) {
+        const q = searchQuery.value.toLowerCase();
+        const matchName = res.name?.toLowerCase().includes(q);
+        const matchEmail = res.email?.toLowerCase().includes(q);
+        if (!matchName && !matchEmail) return false;
+      }
+
+      return true;
+    })
+    .sort((a, b) => a.date.localeCompare(b.date)); // Sort by time within the day
 });
 
 const todayStats = computed(() => calculateStats(formatDateKey(new Date())));
@@ -356,10 +549,10 @@ const isValidEdit = computed(() => {
 });
 
 function calculateStats(dateKey: string) {
-  const dayRes = allReservations.value.filter(r => r.date.startsWith(dateKey));
+  const dayRes = allReservations.value.filter((r) => r.date.startsWith(dateKey));
   return {
     count: dayRes.length,
-    persons: dayRes.reduce((acc, curr) => acc + (curr.quantity || 0), 0)
+    persons: dayRes.reduce((acc, curr) => acc + (curr.quantity || 0), 0),
   };
 }
 
@@ -367,6 +560,7 @@ function adjustDate(days: number) {
   const current = selectedDate.value ? new Date(selectedDate.value) : new Date();
   current.setDate(current.getDate() + days);
   selectedDate.value = formatDateKey(current);
+  visibleMonth.value = startOfMonth(current);
 }
 
 async function fetchReservations() {
@@ -426,9 +620,43 @@ async function doEdit() {
   }
 }
 
+function changeVisibleMonth(offset: number) {
+  const nextMonth = new Date(visibleMonth.value);
+  nextMonth.setMonth(nextMonth.getMonth() + offset);
+  visibleMonth.value = startOfMonth(nextMonth);
+}
+
+function selectCalendarDate(dateKey: string) {
+  selectedDate.value = dateKey;
+  showDatePicker.value = false;
+}
+
+function goToTodayInPicker() {
+  const today = new Date();
+  visibleMonth.value = startOfMonth(today);
+  selectedDate.value = formatDateKey(today);
+  showDatePicker.value = false;
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 function formatDateKey(date: Date) {
-  return date.toISOString().split('T')[0];
+  return date.toISOString().split("T")[0];
+}
+
+function formatDateLong(dateKey: string) {
+  return new Date(`${dateKey}T00:00:00`).toLocaleDateString("nl-NL", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  });
+}
+
+function startOfMonth(date: Date) {
+  return new Date(date.getFullYear(), date.getMonth(), 1);
+}
+
+function endOfMonth(date: Date) {
+  return new Date(date.getFullYear(), date.getMonth() + 1, 0);
 }
 
 function toDateTimeLocalValue(iso: string) {
@@ -456,7 +684,7 @@ function formatDateRelative(iso: string) {
   today.setHours(0, 0, 0, 0);
   const diff = d.getTime() - today.getTime();
   const days = Math.floor(diff / (1000 * 60 * 60 * 24));
-  
+
   if (days === 0) return "Vandaag";
   if (days === 1) return "Morgen";
   if (days === -1) return "Gisteren";
@@ -476,9 +704,10 @@ function confirmDelete(res: Reservation) {
 async function doDelete() {
   if (!deleteTarget.value) return;
   deleting.value = true;
+  const targetId = deleteTarget.value.id;
   try {
-    await apiFetch(`/api/reservations/${deleteTarget.value.id}`, { method: "DELETE" });
-    allReservations.value = allReservations.value.filter((r) => r.id !== deleteTarget.value.id);
+    await apiFetch(`/api/reservations/${targetId}`, { method: "DELETE" });
+    allReservations.value = allReservations.value.filter((r) => r.id !== targetId);
     deleteOpen.value = false;
   } catch (err) {
     console.error("Failed to delete reservation:", err);
@@ -487,7 +716,11 @@ async function doDelete() {
   }
 }
 
-watch(authLoading, (val) => {
-  if (!val) fetchReservations();
-}, { immediate: true });
+watch(
+  authLoading,
+  (val) => {
+    if (!val) fetchReservations();
+  },
+  { immediate: true },
+);
 </script>

@@ -28,10 +28,8 @@ const mailTransporter = nodemailer.createTransport({
 
 async function sendPushNotification(title: string, body: string) {
   try {
-    const tokensSnapshot = await db.collection("push_tokens")
-      .where("role", "==", "kassa")
-      .get();
-      
+    const tokensSnapshot = await db.collection("push_tokens").where("role", "==", "kassa").get();
+
     const tokens = tokensSnapshot.docs.map((doc) => doc.data().token);
 
     if (tokens.length === 0) return;
@@ -43,7 +41,7 @@ async function sendPushNotification(title: string, body: string) {
 
     const response = await getMessaging().sendEachForMulticast(message);
     console.log(`Successfully sent ${response.successCount} push notifications to kassa devices`);
-    
+
     // Cleanup invalid tokens
     if (response.failureCount > 0) {
       const batch = db.batch();
@@ -168,7 +166,9 @@ reservations.post("/", async (c) => {
       html: customerHtml,
     };
 
-    mailTransporter.sendMail(customerMailOptions).catch(err => console.error("Failed to send customer confirmation:", err));
+    mailTransporter
+      .sendMail(customerMailOptions)
+      .catch((err) => console.error("Failed to send customer confirmation:", err));
   }
 
   try {

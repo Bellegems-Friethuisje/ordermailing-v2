@@ -78,13 +78,13 @@ users.get("/", async (c) => {
 
     usersById.set(doc.id, {
       id: doc.id,
-      name: typeof data.name === "string" && data.name ? data.name : existing?.name ?? data.email ?? "Unknown user",
-      email: typeof data.email === "string" ? data.email : existing?.email ?? "",
-      role: typeof data.role === "string" && data.role ? data.role : existing?.role ?? "user",
+      name: typeof data.name === "string" && data.name ? data.name : (existing?.name ?? data.email ?? "Unknown user"),
+      email: typeof data.email === "string" ? data.email : (existing?.email ?? ""),
+      role: typeof data.role === "string" && data.role ? data.role : (existing?.role ?? "user"),
       createdAt:
         typeof data.createdAt === "string" && data.createdAt
           ? data.createdAt
-          : existing?.createdAt ?? new Date(0).toISOString(),
+          : (existing?.createdAt ?? new Date(0).toISOString()),
     });
   }
 
