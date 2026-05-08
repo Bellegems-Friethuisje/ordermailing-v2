@@ -3,12 +3,13 @@
     "dev": "vike dev",
     "build": "vike build",
     "preview": "vike build && vike preview",
-    "create-admin": "bun run scripts/create-admin.ts"
+    "create-admin": "bun run scripts/create-admin.ts",
+    "postinstall": "node scripts/patch-photon-vercel.mjs"
   },
   "dependencies": {
     "@imgly/background-removal": "^1.7.0",
     "@photonjs/hono": "^0.1.12",
-    "@photonjs/vercel": "^0.1.22",
+    "@photonjs/vercel": "^0.1.23",
     "@sentry/node": "^10.43.0",
     "@sentry/vue": "^10.40.0",
     "@supabase/supabase-js": "^2.99.1",
