@@ -39,6 +39,40 @@
       </div>
     </div>
 
+    <!-- Thermal printer section -->
+    <div class="rounded-lg border">
+      <div class="flex flex-col gap-1 border-b px-6 py-4">
+        <h2 class="font-semibold">Thermische printer</h2>
+        <p class="text-sm text-muted-foreground">
+          Stel het IP-adres van de bonprinter (80&nbsp;mm) in. Deze instelling wordt
+          <span class="font-medium text-foreground">centraal bewaard</span> en geldt voor alle toestellen.
+        </p>
+      </div>
+      <div class="flex flex-col gap-4 px-6 py-5">
+        <div class="flex flex-col gap-1.5">
+          <label for="printer-ip" class="text-sm font-medium">Printer IP-adres</label>
+          <Input id="printer-ip" v-model="ipDraft" placeholder="bv. 192.168.1.87" autocomplete="off" />
+          <p class="text-xs text-muted-foreground">
+            Optioneel met poort, bv. <span class="font-mono">192.168.1.87:9100</span>.
+          </p>
+        </div>
+        <div class="flex flex-wrap items-center gap-3">
+          <Button :disabled="ipDraft.trim() === printerIp.trim() || savingIp" @click="saveIp">
+            <Loader2 v-if="savingIp" class="mr-2 size-4 animate-spin" />
+            Opslaan
+          </Button>
+          <Button variant="outline" :disabled="!ipDraft.trim() || testingPrint" @click="testPrint">
+            <Loader2 v-if="testingPrint" class="mr-2 size-4 animate-spin" />
+            <Printer v-else class="mr-2 size-4" />
+            Testprint
+          </Button>
+          <p v-if="testResult" :class="['text-sm', testResult.ok ? 'text-green-600 dark:text-green-400' : 'text-destructive']">
+            {{ testResult.message }}
+          </p>
+        </div>
+      </div>
+    </div>
+
     <!-- Import section -->
     <div class="rounded-lg border">
       <div class="flex flex-col gap-1 border-b px-6 py-4">
@@ -157,15 +191,69 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from "vue";
-import { FileJson, Upload, Loader2, CheckCircle, Sun, Moon } from "lucide-vue-next";
+import { ref, onMounted } from "vue";
+import { FileJson, Upload, Loader2, CheckCircle, Sun, Moon, Printer } from "lucide-vue-next";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { useTheme } from "@/lib/useTheme";
 import { useNolanMode } from "@/lib/useNolanMode";
+import { usePrinterSettings } from "@/lib/usePrinterSettings";
 
 const { isDark, toggleTheme } = useTheme();
 const { nolanMode } = useNolanMode();
+const { printerIp, loadPrinterConfig, savePrinterConfig } = usePrinterSettings();
+
+const ipDraft = ref(printerIp.value);
+const savingIp = ref(false);
+const testingPrint = ref(false);
+const testResult = ref<{ ok: boolean; message: string } | null>(null);
+
+// Load the shared config, then mirror it into the editable draft.
+onMounted(async () => {
+  await loadPrinterConfig();
+  ipDraft.value = printerIp.value;
+});
+
+async function saveIp() {
+  savingIp.value = true;
+  testResult.value = null;
+  try {
+    await savePrinterConfig(ipDraft.value);
+    testResult.value = { ok: true, message: "Opgeslagen." };
+  } catch (e: any) {
+    testResult.value = { ok: false, message: e?.message ?? "Opslaan mislukt." };
+  } finally {
+    savingIp.value = false;
+  }
+}
+
+async function testPrint() {
+  const ip = ipDraft.value.trim();
+  if (!ip) return;
+  testingPrint.value = true;
+  testResult.value = null;
+  try {
+    const res = await apiFetch("/api/print", {
+      method: "POST",
+      body: JSON.stringify({
+        ip,
+        machineName: "Testprint",
+        items: [{ name: "Testartikel", number: 0, total: 1 }],
+      }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      testResult.value = { ok: false, message: (err as any)?.message ?? `Fout (${res.status}).` };
+    } else {
+      testResult.value = { ok: true, message: "Testprint verstuurd." };
+    }
+  } catch (e: any) {
+    testResult.value = { ok: false, message: e?.message ?? "Printen mislukt." };
+  } finally {
+    testingPrint.value = false;
+  }
+}
 import {
   Dialog,
   DialogContent,

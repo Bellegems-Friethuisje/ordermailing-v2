@@ -25,6 +25,7 @@
     "hono": "^4.12.3",
     "lucide-vue-next": "^0.577.0",
     "mp4-muxer": "^5.2.2",
+    "node-thermal-printer": "^4.6.0",
     "radix-vue": "^1.9.17",
     "reka-ui": "^2.9.0",
     "tailwind-merge": "^3.5.0",

@@ -152,9 +152,28 @@
           <!-- Right: missing items panel -->
           <div class="order-1 lg:order-2 w-full lg:sticky lg:top-4 lg:w-72 shrink-0">
             <div class="rounded-xl border bg-card shadow-sm">
-              <div class="border-b px-4 py-3">
-                <p class="text-sm font-semibold">Ontbrekend</p>
-                <p class="text-xs text-muted-foreground">{{ missingItems.length }} artikel{{ missingItems.length !== 1 ? 'en' : '' }} bij te vullen</p>
+              <div class="flex items-start justify-between gap-2 border-b px-4 py-3">
+                <div>
+                  <p class="text-sm font-semibold">Ontbrekend</p>
+                  <p class="text-xs text-muted-foreground">{{ missingItems.length }} artikel{{ missingItems.length !== 1 ? 'en' : '' }} bij te vullen</p>
+                </div>
+                <button
+                  v-if="missingItems.length > 0"
+                  @click="printPickList"
+                  :disabled="isPrinting"
+                  :title="printerIp ? `Print naar ${printerIp}` : 'Stel eerst een printer-IP in bij Settings'"
+                  class="flex shrink-0 items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <Loader2 v-if="isPrinting" class="size-3.5 animate-spin" />
+                  <Printer v-else class="size-3.5" />
+                  Print
+                </button>
+              </div>
+              <div
+                v-if="printError"
+                class="border-b bg-destructive/5 px-4 py-2 text-xs text-destructive"
+              >
+                {{ printError }}
               </div>
 
               <div v-if="missingItems.length === 0" class="px-4 py-8 text-center text-sm text-muted-foreground">
@@ -195,10 +214,17 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from "vue";
-import { Bot, AlertCircle, PackageX, PackageMinus, PackageCheck } from "lucide-vue-next";
+import { ref, computed, onMounted } from "vue";
+import { Bot, AlertCircle, PackageX, PackageMinus, PackageCheck, Printer, Loader2 } from "lucide-vue-next";
 import TopLoader from "@/components/ui/top-loader/TopLoader.vue";
 import { apiFetch } from "@/lib/apiFetch";
+import { usePrinterSettings } from "@/lib/usePrinterSettings";
+
+const { printerIp, loadPrinterConfig } = usePrinterSettings();
+const isPrinting = ref(false);
+const printError = ref<string | null>(null);
+
+onMounted(() => void loadPrinterConfig());
 
 interface MachineItem {
   name: string;
@@ -328,6 +354,37 @@ async function fetchMachine(code: MachineCode) {
     error.value = e?.message ?? "Onbekende fout. Probeer opnieuw.";
   } finally {
     isFetching.value = false;
+  }
+}
+
+// ─── Print pick list (pluklijst) to thermal printer ──────────────────────────
+async function printPickList() {
+  printError.value = null;
+  const ip = printerIp.value.trim();
+  if (!ip) {
+    printError.value = "Geen printer ingesteld. Stel een printer-IP in bij Settings.";
+    return;
+  }
+  if (missingItems.value.length === 0) return;
+
+  isPrinting.value = true;
+  try {
+    const res = await apiFetch("/api/print", {
+      method: "POST",
+      body: JSON.stringify({
+        ip,
+        machineName: selectedMachine.value ? MACHINE_NAMES[selectedMachine.value] : "Automaat",
+        items: missingItems.value.map((i) => ({ name: i.name, number: i.number, total: i.total })),
+      }),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error((body as any)?.message ?? `HTTP ${res.status}`);
+    }
+  } catch (e: any) {
+    printError.value = e?.message ?? "Printen mislukt.";
+  } finally {
+    isPrinting.value = false;
   }
 }
 </script>
