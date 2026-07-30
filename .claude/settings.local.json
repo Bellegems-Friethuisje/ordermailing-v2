@@ -10,7 +10,16 @@
       "Bash(Get-ChildItem C:\\\\Users\\\\Elias\\\\Desktop\\\\ordermailing -Exclude node_modules)",
       "Bash(Select-Object Name, LastWriteTime)",
       "Bash(bun x *)",
-      "Bash(node *)"
+      "Bash(node *)",
+      "Bash(npx tsc *)",
+      "Bash(bun run *)",
+      "Bash(bunx vite *)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(npm view *)",
+      "Bash(bunx tsc *)",
+      "Bash(bunx vue-tsc *)",
+      "Bash(echo \"exit=$?\")",
+      "Bash(python -)"
     ]
   }
 }
