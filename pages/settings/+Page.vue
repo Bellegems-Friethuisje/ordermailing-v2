@@ -44,24 +44,19 @@
       <div class="flex flex-col gap-1 border-b px-6 py-4">
         <h2 class="font-semibold">Thermische printer</h2>
         <p class="text-sm text-muted-foreground">
-          Stel het IP-adres van de bonprinter (80&nbsp;mm) in. Deze instelling wordt
-          <span class="font-medium text-foreground">centraal bewaard</span> en geldt voor alle toestellen.
+          Bonnen (80&nbsp;mm) worden geprint via het printvenster van het toestel zelf, dus
+          <span class="font-medium text-foreground">AirPrint</span> op de iPad. Er is geen
+          IP-adres meer nodig: kies de bonprinter in het printvenster.
         </p>
       </div>
       <div class="flex flex-col gap-4 px-6 py-5">
-        <div class="flex flex-col gap-1.5">
-          <label for="printer-ip" class="text-sm font-medium">Printer IP-adres</label>
-          <Input id="printer-ip" v-model="ipDraft" placeholder="bv. 192.168.1.87" autocomplete="off" />
-          <p class="text-xs text-muted-foreground">
-            Optioneel met poort, bv. <span class="font-mono">192.168.1.87:9100</span>.
-          </p>
-        </div>
+        <p class="text-xs text-muted-foreground">
+          Verschijnt de printer niet in de lijst? Dan ondersteunt hij geen AirPrint en moet er
+          een printserver bij. Zet in het printvenster het papierformaat op de bonrol
+          (80&nbsp;mm) en schaal op 100&nbsp;%.
+        </p>
         <div class="flex flex-wrap items-center gap-3">
-          <Button :disabled="ipDraft.trim() === printerIp.trim() || savingIp" @click="saveIp">
-            <Loader2 v-if="savingIp" class="mr-2 size-4 animate-spin" />
-            Opslaan
-          </Button>
-          <Button variant="outline" :disabled="!ipDraft.trim() || testingPrint" @click="testPrint">
+          <Button variant="outline" :disabled="testingPrint" @click="testPrint">
             <Loader2 v-if="testingPrint" class="mr-2 size-4 animate-spin" />
             <Printer v-else class="mr-2 size-4" />
             Testprint
@@ -194,130 +189,37 @@
 import { ref, onMounted } from "vue";
 import { FileJson, Upload, Loader2, CheckCircle, Sun, Moon, Printer } from "lucide-vue-next";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { useTheme } from "@/lib/useTheme";
 import { useNolanMode } from "@/lib/useNolanMode";
-import { usePrinterSettings } from "@/lib/usePrinterSettings";
-import { Printer as ThermalPrinter } from "@node-escpos/core";
-// Trailing slash forces the npm polyfill rather than the Node built-in.
-import { Buffer } from "buffer/";
+import { printReceipt, type ReceiptNode } from "@/lib/receiptPrint";
 
 const { isDark, toggleTheme } = useTheme();
 const { nolanMode } = useNolanMode();
-const { printerIp, loadPrinterConfig, savePrinterConfig } = usePrinterSettings();
 
-const ipDraft = ref(printerIp.value);
-const savingIp = ref(false);
 const testingPrint = ref(false);
 const testResult = ref<{ ok: boolean; message: string } | null>(null);
 
-// Load the shared config, then mirror it into the editable draft.
-onMounted(async () => {
-  await loadPrinterConfig();
-  ipDraft.value = printerIp.value;
-});
-
-async function saveIp() {
-  savingIp.value = true;
-  testResult.value = null;
-  try {
-    await savePrinterConfig(ipDraft.value);
-    testResult.value = { ok: true, message: "Opgeslagen." };
-  } catch (e: any) {
-    testResult.value = { ok: false, message: e?.message ?? "Opslaan mislukt." };
-  } finally {
-    savingIp.value = false;
-  }
-}
-
-// ─── Printer transport ────────────────────────────────────────────────────────
-// A browser has no raw TCP socket, so instead of @node-escpos/network-adapter we
-// hand the printer an adapter that POSTs the finished ESC/POS buffer at port 9100
-// (JetDirect), which is what the POS 80D speaks - it has no HTTP print service,
-// so there is nothing to negotiate. @node-escpos/core only ever calls write()
-// and close().
-//
-// Port 9100 is a raw socket, not an HTTP server: it consumes the body, prints it,
-// and never sends a response. The request can therefore only ever end in our own
-// timeout, and hitting that timeout is what "delivered" looks like. A refused or
-// unreachable port rejects long before the timeout, and is a real error.
-function createHttpAdapter(ip: string) {
-  const send = async (buffer: Buffer) => {
-    if (typeof window !== "undefined" && window.location.protocol === "https:") {
-      throw new Error(
-        `De browser blokkeert de verbinding naar ${ip}: deze pagina is HTTPS, de printer HTTP.`,
-      );
-    }
-
-    try {
-      await fetch(`http://${ip.includes(":") ? ip : `${ip}:9100`}/`, {
-        method: "POST",
-        mode: "no-cors",
-        body: new Uint8Array(buffer),
-        signal: AbortSignal.timeout(2000),
-      });
-    } catch (err) {
-      const name = (err as { name?: string } | undefined)?.name;
-      if (name !== "TimeoutError" && name !== "AbortError") {
-        throw new Error(`Kan de printer op ${ip} niet bereiken.`);
-      }
-    }
-  };
-
-  return {
-    open: (cb?: (e: Error | null) => void) => cb?.(null),
-    write: (data: Buffer, cb?: (e: Error | null) => void) => {
-      void send(data).then(
-        () => cb?.(null),
-        (e) => cb?.(e instanceof Error ? e : new Error(String(e))),
-      );
-    },
-    close: (cb?: (e: Error | null) => void) => cb?.(null),
-    read: () => {},
-  } as unknown as ConstructorParameters<typeof ThermalPrinter>[0];
-}
-
 // ─── Testprint ────────────────────────────────────────────────────────────────
-// The printer sits on the shop's LAN, which the server cannot reach, so the
-// receipt is built and sent straight from the browser.
+// Opens the system print sheet - see lib/receiptPrint.ts for why the browser
+// cannot talk to the printer directly.
 async function testPrint() {
-  const ip = ipDraft.value.trim();
-  if (!ip) return;
   testingPrint.value = true;
   testResult.value = null;
 
-  // iconv-lite and mutable-buffer reach for Buffer as a global.
-  (globalThis as { Buffer?: unknown }).Buffer ??= Buffer;
-
-  const printer = new ThermalPrinter(createHttpAdapter(ip), {
-    encoding: "CP858",
-    width: 48,
-  });
-
-  printer.hardware("init");
-  printer.setCharacterCodeTable(19); // PC858 (Latin-1 + Euro)
-  printer.align("ct");
-  printer.style("b");
-  printer.size(2, 2);
-  printer.text("TESTPRINT");
-  printer.size(1, 1);
-  printer.style("normal");
-  printer.text(new Date().toLocaleString("nl-BE"));
-  printer.drawLine();
-  printer.align("lt");
-  printer.tableCustom([
-    { text: "Testartikel", align: "left", width: 0.72 },
-    { text: "1x", align: "right", width: 0.28 },
-  ]);
-  printer.newLine();
-  printer.cut();
+  const nodes: ReceiptNode[] = [
+    { type: "title", text: "TESTPRINT" },
+    { type: "line", align: "center", text: new Date().toLocaleString("nl-BE") },
+    { type: "rule" },
+    { type: "row", left: "Testartikel", right: "1x" },
+  ];
 
   try {
-    // close() flushes the buffer through the adapter - this is where the
-    // receipt actually leaves the browser.
-    await printer.close();
-    testResult.value = { ok: true, message: "Testprint verstuurd." };
+    await printReceipt(nodes);
+    testResult.value = {
+      ok: true,
+      message: "Printvenster geopend. Kies de bonprinter en druk op Print.",
+    };
   } catch (e: any) {
     testResult.value = { ok: false, message: e?.message ?? "Printen mislukt." };
   } finally {

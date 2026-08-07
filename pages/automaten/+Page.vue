@@ -161,7 +161,7 @@
                   v-if="missingItems.length > 0"
                   @click="printPickList"
                   :disabled="isPrinting"
-                  :title="printerIp ? `Print naar ${printerIp}` : 'Stel eerst een printer-IP in bij Settings'"
+                  title="Pluklijst printen"
                   class="flex shrink-0 items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <Loader2 v-if="isPrinting" class="size-3.5 animate-spin" />
@@ -214,20 +214,14 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from "vue";
+import { ref, computed } from "vue";
 import { Bot, AlertCircle, PackageX, PackageMinus, PackageCheck, Printer, Loader2 } from "lucide-vue-next";
 import TopLoader from "@/components/ui/top-loader/TopLoader.vue";
 import { apiFetch } from "@/lib/apiFetch";
-import { usePrinterSettings } from "@/lib/usePrinterSettings";
-import { Printer as ThermalPrinter } from "@node-escpos/core";
-// Trailing slash forces the npm polyfill rather than the Node built-in.
-import { Buffer } from "buffer/";
+import { printReceipt, type ReceiptNode } from "@/lib/receiptPrint";
 
-const { printerIp, loadPrinterConfig } = usePrinterSettings();
 const isPrinting = ref(false);
 const printError = ref<string | null>(null);
-
-onMounted(() => void loadPrinterConfig());
 
 interface MachineItem {
   name: string;
@@ -360,125 +354,57 @@ async function fetchMachine(code: MachineCode) {
   }
 }
 
-// ─── Printer transport ────────────────────────────────────────────────────────
-// A browser has no raw TCP socket, so instead of @node-escpos/network-adapter we
-// hand the printer an adapter that POSTs the finished ESC/POS buffer at port 9100
-// (JetDirect), which is what the POS 80D speaks - it has no HTTP print service,
-// so there is nothing to negotiate. @node-escpos/core only ever calls write()
-// and close().
-//
-// Port 9100 is a raw socket, not an HTTP server: it consumes the body, prints it,
-// and never sends a response. The request can therefore only ever end in our own
-// timeout, and hitting that timeout is what "delivered" looks like. A refused or
-// unreachable port rejects long before the timeout, and is a real error.
-function createHttpAdapter(ip: string) {
-  const send = async (buffer: Buffer) => {
-    if (typeof window !== "undefined" && window.location.protocol === "https:") {
-      throw new Error(
-        `De browser blokkeert de verbinding naar ${ip}: deze pagina is HTTPS, de printer HTTP.`,
-      );
-    }
-
-    try {
-      await fetch(`http://${ip.includes(":") ? ip : `${ip}:9100`}/`, {
-        method: "POST",
-        mode: "no-cors",
-        body: new Uint8Array(buffer),
-        signal: AbortSignal.timeout(2000),
-      });
-    } catch (err) {
-      const name = (err as { name?: string } | undefined)?.name;
-      if (name !== "TimeoutError" && name !== "AbortError") {
-        throw new Error(`Kan de printer op ${ip} niet bereiken.`);
-      }
-    }
-  };
-
-  return {
-    open: (cb?: (e: Error | null) => void) => cb?.(null),
-    write: (data: Buffer, cb?: (e: Error | null) => void) => {
-      void send(data).then(
-        () => cb?.(null),
-        (e) => cb?.(e instanceof Error ? e : new Error(String(e))),
-      );
-    },
-    close: (cb?: (e: Error | null) => void) => cb?.(null),
-    read: () => {},
-  } as unknown as ConstructorParameters<typeof ThermalPrinter>[0];
-}
-
-// ─── Print pick list (pluklijst) to thermal printer ──────────────────────────
-// Printed straight from the browser: the printer lives on this network, not on
-// the server.
+// ─── Print pick list (pluklijst) ──────────────────────────────────────────────
+// Goes through the system print sheet (AirPrint on the shop iPad) - see
+// lib/receiptPrint.ts for why the browser cannot talk to the printer directly.
 async function printPickList() {
-  printError.value = null;
-  const ip = printerIp.value.trim();
-  if (!ip) {
-    printError.value = "Geen printer ingesteld. Stel een printer-IP in bij Settings.";
-    return;
-  }
   if (missingItems.value.length === 0) return;
 
+  printError.value = null;
   isPrinting.value = true;
 
-  // iconv-lite and mutable-buffer reach for Buffer as a global.
-  (globalThis as { Buffer?: unknown }).Buffer ??= Buffer;
-
-  const printer = new ThermalPrinter(createHttpAdapter(ip), {
-    encoding: "CP858",
-    width: 48,
-  });
-
-  printer.hardware("init");
-  printer.setCharacterCodeTable(19); // PC858 (Latin-1 + Euro)
-  printer.align("ct");
-  printer.style("b");
-  printer.size(2, 2);
-  printer.text("PLUKLIJST");
-  printer.size(1, 1);
-  printer.style("normal");
-  printer.text(selectedMachine.value ? MACHINE_NAMES[selectedMachine.value] : "Automaat");
-  printer.text(
-    new Date().toLocaleString("nl-BE", {
-      day: "2-digit",
-      month: "2-digit",
-      year: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    }),
-  );
-  printer.drawLine();
-
-  printer.align("lt");
-  printer.tableCustom([
-    { text: "Artikel", align: "left", width: 0.72, style: "b" },
-    { text: "Pluk", align: "right", width: 0.28, style: "b" },
-  ]);
-  printer.drawLine();
+  const nodes: ReceiptNode[] = [
+    { type: "title", text: "PLUKLIJST" },
+    {
+      type: "line",
+      align: "center",
+      text: selectedMachine.value ? MACHINE_NAMES[selectedMachine.value] : "Automaat",
+    },
+    {
+      type: "line",
+      align: "center",
+      text: new Date().toLocaleString("nl-BE", {
+        day: "2-digit",
+        month: "2-digit",
+        year: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      }),
+    },
+    { type: "rule" },
+    { type: "row", left: "Artikel", right: "Pluk", bold: true },
+    { type: "rule" },
+  ];
 
   let totalToPick = 0;
   for (const item of missingItems.value) {
     const toPick = Math.max(0, item.total - item.number);
     totalToPick += toPick;
-    printer.tableCustom([
-      { text: item.name, align: "left", width: 0.72 },
-      { text: `${toPick}x`, align: "right", width: 0.28 },
-    ]);
+    nodes.push({ type: "row", left: item.name, right: `${toPick}x` });
   }
 
-  printer.drawLine();
-  printer.tableCustom([
-    { text: `Totaal (${missingItems.value.length} artikelen)`, align: "left", width: 0.72, style: "b" },
-    { text: `${totalToPick}x`, align: "right", width: 0.28, style: "b" },
-  ]);
-
-  printer.newLine();
-  printer.cut();
+  nodes.push(
+    { type: "rule" },
+    {
+      type: "row",
+      left: `Totaal (${missingItems.value.length} artikelen)`,
+      right: `${totalToPick}x`,
+      bold: true,
+    },
+  );
 
   try {
-    // close() flushes the buffer through the adapter - this is where the
-    // receipt actually leaves the browser.
-    await printer.close();
+    await printReceipt(nodes);
   } catch (e: any) {
     printError.value = e?.message ?? "Printen mislukt.";
   } finally {

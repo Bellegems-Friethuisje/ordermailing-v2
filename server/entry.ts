@@ -10,7 +10,6 @@ import { automatenRouter } from "./api/automaten";
 import { designsRouter } from "./api/designs";
 import { reservationsRouter } from "./api/reservations";
 import { sollicitatiesRouter } from "./api/sollicitaties";
-import { printRouter } from "./api/print";
 
 sentryServerConfig();
 
@@ -56,7 +55,6 @@ function startApp() {
   app.route("/api/designs", designsRouter);
   app.route("/api/reservations", reservationsRouter);
   app.route("/api/sollicitaties", sollicitatiesRouter);
-  app.route("/api/print", printRouter);
 
   apply(app, []);
 
