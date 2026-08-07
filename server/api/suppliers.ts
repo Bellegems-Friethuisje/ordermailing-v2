@@ -1,8 +1,28 @@
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
+import { FieldValue } from "firebase-admin/firestore";
 import { adminAuth, db } from "../firebase-admin";
 
 const suppliers = new Hono();
+
+// ─── Price helpers ────────────────────────────────────────────────────────────
+export type PriceSource = "manual" | "scrape";
+
+/** A single append-only entry for a product's `priceHistory` array. */
+function priceHistoryEntry(price: number, source: PriceSource) {
+  return { price, date: new Date().toISOString(), source };
+}
+
+/** Prices are money — keep them at two decimals so totals don't drift. */
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
+}
+
+/** Coerce anything the client sends into a non-negative price. */
+function toPrice(value: unknown): number {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? round2(n) : 0;
+}
 
 // ─── Auth middleware ──────────────────────────────────────────────────────────
 suppliers.use("*", async (c, next) => {
@@ -83,6 +103,53 @@ suppliers.delete("/:id", async (c) => {
   return c.json({ ok: true });
 });
 
+// ─── POST /api/suppliers/scrape-price ────────────────────────────────────────
+// Fetches a product page and tries to pull a price out of it. Best-effort:
+// never throws, always answers `{ price, raw, error? }` so the UI can show why.
+suppliers.post("/scrape-price", async (c) => {
+  const { url } = await c.req.json<{ url: string }>();
+  if (!url) throw new HTTPException(400, { message: "url is required" });
+
+  try {
+    const { load } = await import("cheerio");
+    const res = await fetch(url, {
+      headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" },
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!res.ok) return c.json({ price: null, raw: null, error: `HTTP ${res.status}` });
+
+    const $ = load(await res.text());
+
+    const selectors = [
+      '[itemprop="price"]',
+      'meta[itemprop="price"]',
+      '[class*="price--current"]',
+      '[class*="current-price"]',
+      '[class*="sale-price"]',
+      '[class*="product-price"]',
+      ".price",
+      "[data-price]",
+      '[class*="price"]',
+    ];
+
+    let rawPrice: string | null = null;
+    for (const sel of selectors) {
+      const el = $(sel).first();
+      if (!el.length) continue;
+      rawPrice = el.attr("content") ?? el.attr("data-price") ?? el.attr("data-product-price") ?? el.text().trim();
+      if (rawPrice) break;
+    }
+
+    if (!rawPrice) return c.json({ price: null, raw: null });
+
+    const cleaned = rawPrice.replace(/[^\d,.]/g, "").replace(",", ".");
+    const price = parseFloat(cleaned);
+    return c.json({ price: isNaN(price) ? null : round2(price), raw: rawPrice });
+  } catch (err) {
+    return c.json({ price: null, raw: null, error: (err as Error).message });
+  }
+});
+
 // ─── GET /api/suppliers/:id/products ─────────────────────────────────────────
 suppliers.get("/:id/products", async (c) => {
   const id = c.req.param("id");
@@ -94,19 +161,25 @@ suppliers.get("/:id/products", async (c) => {
 // ─── POST /api/suppliers/:id/products ────────────────────────────────────────
 suppliers.post("/:id/products", async (c) => {
   const id = c.req.param("id");
-  const { supplierName, internalName, manualOrder, isActive, idealStock, displayOrder } = await c.req.json<{
+  const body = await c.req.json<{
     supplierName: string;
     internalName: string;
     manualOrder?: boolean;
     isActive?: boolean;
     idealStock?: number;
     displayOrder?: number;
+    price?: number;
+    priceUnit?: string;
+    supplierUrl?: string;
+    priceSource?: PriceSource;
   }>();
+  const { supplierName, internalName, manualOrder, isActive, idealStock, displayOrder } = body;
 
   if (!supplierName || !internalName) {
     throw new HTTPException(400, { message: "supplierName and internalName are required" });
   }
 
+  const price = toPrice(body.price);
   const ref = await db
     .collection("suppliers")
     .doc(id)
@@ -118,6 +191,12 @@ suppliers.post("/:id/products", async (c) => {
       isActive: isActive ?? true,
       idealStock: idealStock ?? 0,
       displayOrder: displayOrder ?? 0,
+      price,
+      priceUnit: body.priceUnit || "stuk",
+      supplierUrl: body.supplierUrl ?? "",
+      // Seed the history with the opening price so later changes have something
+      // to be measured against. A product created without a price starts empty.
+      priceHistory: price > 0 ? [priceHistoryEntry(price, body.priceSource === "scrape" ? "scrape" : "manual")] : [],
       createdAt: new Date().toISOString(),
     });
 
@@ -137,22 +216,89 @@ suppliers.patch("/:id/products/:productId", async (c) => {
       isActive: boolean;
       idealStock: number;
       displayOrder: number;
+      price: number;
+      priceUnit: string;
+      supplierUrl: string;
+      priceSource: PriceSource;
     }>
   >();
-  const allowed: (keyof typeof body)[] = [
+  const allowed = [
     "supplierName",
     "internalName",
     "manualOrder",
     "isActive",
     "idealStock",
     "displayOrder",
-  ];
+    "price",
+    "priceUnit",
+    "supplierUrl",
+  ] as const;
   const update: Record<string, unknown> = {};
   for (const key of allowed) {
     if (key in body) update[key] = body[key];
   }
-  await db.collection("suppliers").doc(id).collection("products").doc(productId).update(update);
+
+  const ref = db.collection("suppliers").doc(id).collection("products").doc(productId);
+
+  // The history entry is decided here, not by the client: read what the price is
+  // right now and only append when it actually moved.
+  if ("price" in body) {
+    const nextPrice = toPrice(body.price);
+    update.price = nextPrice;
+    const snap = await ref.get();
+    const currentPrice = toPrice(snap.data()?.price);
+    if (nextPrice !== currentPrice && nextPrice > 0) {
+      update.priceHistory = FieldValue.arrayUnion(
+        priceHistoryEntry(nextPrice, body.priceSource === "scrape" ? "scrape" : "manual"),
+      );
+    }
+  }
+
+  await ref.update(update);
   return c.json({ ok: true });
+});
+
+// ─── PUT /api/suppliers/:id/products/prices ──────────────────────────────────
+// Bulk price entry: one batch, one history entry per *changed* price.
+suppliers.put("/:id/products/prices", async (c) => {
+  const id = c.req.param("id");
+  const { prices } = await c.req.json<{
+    prices: Array<{ productId: string; price: number; priceUnit?: string }>;
+  }>();
+
+  if (!Array.isArray(prices)) {
+    throw new HTTPException(400, { message: "prices array is required" });
+  }
+
+  const collection = db.collection("suppliers").doc(id).collection("products");
+  const batch = db.batch();
+  let updated = 0;
+  let historyAppended = 0;
+
+  for (const entry of prices) {
+    if (!entry?.productId) continue;
+    const ref = collection.doc(entry.productId);
+    const snap = await ref.get();
+    if (!snap.exists) continue;
+
+    const nextPrice = toPrice(entry.price);
+    const currentPrice = toPrice(snap.data()?.price);
+    const currentUnit = (snap.data()?.priceUnit as string) || "stuk";
+    const nextUnit = entry.priceUnit || currentUnit;
+
+    if (nextPrice === currentPrice && nextUnit === currentUnit) continue;
+
+    const update: Record<string, unknown> = { price: nextPrice, priceUnit: nextUnit };
+    if (nextPrice !== currentPrice && nextPrice > 0) {
+      update.priceHistory = FieldValue.arrayUnion(priceHistoryEntry(nextPrice, "manual"));
+      historyAppended++;
+    }
+    batch.update(ref, update);
+    updated++;
+  }
+
+  if (updated > 0) await batch.commit();
+  return c.json({ ok: true, updated, historyAppended });
 });
 
 // ─── DELETE /api/suppliers/:id/products/:productId ───────────────────────────
@@ -223,6 +369,7 @@ suppliers.post("/import", async (c) => {
       const supplierName = (p.orderName ?? p.supplierName ?? "") as string;
       const internalName = (p.displayName ?? p.internalName ?? supplierName) as string;
       if (!supplierName) continue;
+      const price = toPrice(p.price);
       await db
         .collection("suppliers")
         .doc(supplierRef.id)
@@ -235,6 +382,10 @@ suppliers.post("/import", async (c) => {
           isActive: p.isActive ?? true,
           idealStock: (p.defaultStock ?? p.idealStock ?? 0) as number,
           displayOrder: (p.displayOrder ?? 0) as number,
+          price,
+          priceUnit: (p.priceUnit as string) || "stuk",
+          supplierUrl: (p.supplierUrl as string) ?? "",
+          priceHistory: price > 0 ? [priceHistoryEntry(price, "manual")] : [],
           createdAt: new Date().toISOString(),
         });
       productsCreated++;
