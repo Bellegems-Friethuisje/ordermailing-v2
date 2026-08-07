@@ -110,6 +110,12 @@
             >
               {{ product.supplierName }}
             </p>
+            <p v-if="hasPrices" class="mt-0.5 text-xs text-muted-foreground">
+              <template v-if="product.price">
+                {{ formatEuro(product.price) }} / {{ product.priceUnit || "stuk" }}
+              </template>
+              <template v-else>— geen prijs</template>
+            </p>
           </div>
           <p class="shrink-0 text-sm text-muted-foreground">
             Ideale stock: <span class="font-medium text-foreground">{{ product.idealStock }}</span>
@@ -189,6 +195,12 @@
           <span v-else class="text-muted-foreground"
             >{{ orderLines.length }} item{{ orderLines.length !== 1 ? "s" : "" }}</span
           >
+
+          <!-- Running order total, next to the item count -->
+          <template v-if="hasPrices">
+            <span class="text-muted-foreground">·</span>
+            <span class="shrink-0 font-semibold tabular-nums">{{ formatEuro(orderTotal) }}</span>
+          </template>
         </div>
         <Button :disabled="orderLines.length === 0" @click="reviewOpen = true">
           <ClipboardList class="mr-2 size-4" />
@@ -220,6 +232,7 @@
             <tr>
               <th class="px-3 py-2 text-left font-medium text-muted-foreground">Product</th>
               <th class="px-3 py-2 text-right font-medium text-muted-foreground">Qty</th>
+              <th v-if="hasPrices" class="px-3 py-2 text-right font-medium text-muted-foreground">Prijs</th>
             </tr>
           </thead>
           <tbody class="divide-y">
@@ -231,8 +244,20 @@
                 </p>
               </td>
               <td class="px-3 py-2 text-right font-semibold tabular-nums">{{ line.quantity }}</td>
+              <td v-if="hasPrices" class="px-3 py-2 text-right tabular-nums">
+                <p class="font-semibold">{{ formatEuro(line.lineTotal) }}</p>
+                <p v-if="line.unitPrice" class="text-xs text-muted-foreground">
+                  {{ formatEuro(line.unitPrice) }} / {{ line.priceUnit }}
+                </p>
+              </td>
             </tr>
           </tbody>
+          <tfoot v-if="hasPrices" class="sticky bottom-0 border-t bg-muted/80 backdrop-blur">
+            <tr>
+              <td class="px-3 py-2 font-semibold" colspan="2">Totaal</td>
+              <td class="px-3 py-2 text-right font-bold tabular-nums">{{ formatEuro(orderTotal) }}</td>
+            </tr>
+          </tfoot>
         </table>
       </div>
 
@@ -301,6 +326,55 @@
         </p>
       </div>
 
+      <!-- Weather / calendar context the model saw -->
+      <div
+        v-if="forecastDays.length"
+        :class="[
+          'rounded-lg border border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/20',
+          !isDesktop && 'mx-6',
+        ]"
+      >
+        <button
+          type="button"
+          class="flex w-full items-center justify-between gap-2 px-4 py-2.5 text-left"
+          @click="contextOpen = !contextOpen"
+        >
+          <span class="flex items-center gap-2 text-sm font-semibold text-amber-900 dark:text-amber-300">
+            <CloudSun class="size-4 text-amber-600 dark:text-amber-400" />
+            Waarom deze suggestie?
+          </span>
+          <ChevronDown
+            :class="[
+              'size-4 shrink-0 text-amber-600 transition-transform dark:text-amber-400',
+              contextOpen && 'rotate-180',
+            ]"
+          />
+        </button>
+        <div v-if="contextOpen" class="flex gap-1.5 overflow-x-auto px-4 pb-3">
+          <div
+            v-for="d in forecastDays"
+            :key="d.date"
+            :class="[
+              'flex w-[68px] shrink-0 flex-col items-center gap-0.5 rounded-md border px-1.5 py-1.5 text-center',
+              d.flag
+                ? 'border-amber-400 bg-amber-100 dark:border-amber-600 dark:bg-amber-900/40'
+                : 'border-amber-200 bg-white dark:border-amber-800/50 dark:bg-amber-950/40',
+            ]"
+          >
+            <span class="text-[11px] font-medium uppercase text-amber-800 dark:text-amber-300">{{ d.short }}</span>
+            <span class="text-sm font-semibold tabular-nums">{{ Math.round(d.tempMax) }}°</span>
+            <span class="w-full truncate text-[10px] text-muted-foreground" :title="d.label">{{ d.label }}</span>
+            <span
+              :class="['size-2 rounded-full', terrasColor(d.terrasScore)]"
+              :title="`Terrasscore ${d.terrasScore}/10`"
+            />
+            <span v-if="d.flag" class="w-full truncate text-[10px] font-medium text-amber-700 dark:text-amber-400">
+              {{ d.flag }}
+            </span>
+          </div>
+        </div>
+      </div>
+
       <div
         v-if="suggestions.length === 0"
         :class="['py-6 text-center text-sm text-muted-foreground', !isDesktop && 'px-6']"
@@ -316,7 +390,11 @@
             </tr>
           </thead>
           <tbody class="divide-y">
-            <tr v-for="s in suggestions" :key="s.productId" :class="s.note && 'bg-amber-50/60 dark:bg-amber-950/30'">
+            <tr
+              v-for="s in suggestions"
+              :key="s.productId"
+              :class="(s.note || driverLabel(s.driver)) && 'bg-amber-50/60 dark:bg-amber-950/30'"
+            >
               <td class="px-3 py-2">
                 <div class="flex items-center gap-1.5">
                   <AlertTriangle
@@ -325,7 +403,15 @@
                   />
                   <div>
                     <p class="font-medium">{{ filteredProducts.find((p) => p.id === s.productId)?.internalName ?? s.productId }}</p>
-                    <p v-if="s.note" class="text-xs text-amber-700 dark:text-amber-400">{{ s.note }}</p>
+                    <div v-if="s.note || driverLabel(s.driver)" class="flex flex-wrap items-center gap-1.5">
+                      <p v-if="s.note" class="text-xs text-amber-700 dark:text-amber-400">{{ s.note }}</p>
+                      <span
+                        v-if="driverLabel(s.driver)"
+                        class="shrink-0 rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-800 dark:bg-amber-900/60 dark:text-amber-300"
+                      >
+                        {{ driverLabel(s.driver) }}
+                      </span>
+                    </div>
                   </div>
                 </div>
               </td>
@@ -395,6 +481,8 @@ import {
   Check,
   X,
   AlertTriangle,
+  CloudSun,
+  ChevronDown,
 } from "lucide-vue-next";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -439,6 +527,15 @@ interface Product {
   idealStock: number;
   displayOrder: number;
   manualOrder: boolean;
+  /** Cost price excl. VAT. Absent on products that predate pricing. */
+  price?: number;
+  priceUnit?: string;
+}
+
+/** € 12,50 — an em dash when there is no price, so unpriced products look unpriced. */
+function formatEuro(amount?: number): string {
+  if (!amount) return "—";
+  return `€ ${amount.toLocaleString("nl-NL", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
 const { loading: authLoading } = useAuth();
@@ -511,13 +608,29 @@ function countedQty(product: Product): number {
 const orderLines = computed(() =>
   filteredProducts.value
     .filter((p) => orderQty(p) > 0)
-    .map((p) => ({
-      productId: p.id,
-      supplierName: p.supplierName,
-      internalName: p.internalName,
-      quantity: orderQty(p),
-    })),
+    .map((p) => {
+      const quantity = orderQty(p);
+      const unitPrice = p.price ?? 0;
+      return {
+        productId: p.id,
+        supplierName: p.supplierName,
+        internalName: p.internalName,
+        quantity,
+        // Display only — the server re-resolves prices from Firestore on write.
+        unitPrice,
+        priceUnit: p.priceUnit || "stuk",
+        lineTotal: Math.round(unitPrice * quantity * 100) / 100,
+      };
+    }),
 );
+
+/** Running total of the order as it stands. Unpriced products contribute 0. */
+const orderTotal = computed(() =>
+  Math.round(orderLines.value.reduce((sum, l) => sum + l.lineTotal, 0) * 100) / 100,
+);
+
+/** Only show money once at least one product in this order actually has a price. */
+const hasPrices = computed(() => filteredProducts.value.some((p) => (p.price ?? 0) > 0));
 
 // ─── Autosave ─────────────────────────────────────────────────────────────────
 const LS_KEY = "order_draft";
@@ -855,11 +968,68 @@ interface AISuggestion {
   productId: string;
   quantity: number;
   note?: string;
+  /** Dominant reason for the quantity — optional, older responses omit it */
+  driver?: string;
 }
+interface WeatherDay {
+  date: string;
+  tempMax: number;
+  tempMin: number;
+  precipitation: number;
+  precipitationProbability: number;
+  windMax: number;
+  code: number;
+  label: string;
+  terrasScore: number;
+}
+interface CalendarDay {
+  date: string;
+  dayName: string;
+  isPublicHoliday: boolean;
+  holidayName?: string;
+  isSchoolHoliday: boolean;
+}
+interface SuggestionContext {
+  weather: WeatherDay[] | null;
+  holidays: CalendarDay[];
+}
+
 const generating = ref(false);
 const suggestions = ref<AISuggestion[]>([]);
 const suggestionOpen = ref(false);
 const fromAiTemplate = ref(false);
+const suggestionContext = ref<SuggestionContext | null>(null);
+const contextOpen = ref(false);
+
+const DAY_NAMES_SHORT = ["zo", "ma", "di", "wo", "do", "vr", "za"];
+
+/** Forecast days merged with their calendar flags — empty when the weather lookup failed */
+const forecastDays = computed(() =>
+  (suggestionContext.value?.weather ?? []).map((w) => {
+    const day = suggestionContext.value?.holidays.find((h) => h.date === w.date);
+    const flags: string[] = [];
+    if (day?.isPublicHoliday) flags.push(day.holidayName ?? "feestdag");
+    if (day?.isSchoolHoliday) flags.push("vakantie");
+    return {
+      ...w,
+      short: DAY_NAMES_SHORT[new Date(`${w.date}T00:00:00Z`).getUTCDay()],
+      flag: flags.join(", "),
+    };
+  }),
+);
+
+function terrasColor(score: number): string {
+  if (score >= 7) return "bg-green-500";
+  if (score >= 4) return "bg-amber-500";
+  return "bg-slate-400";
+}
+
+/** Only weather- and holiday-driven suggestions get a badge; trend/normaal render as before */
+function driverLabel(driver?: string): string {
+  if (driver === "weer") return "weer";
+  if (driver === "vakantie") return "vakantie";
+  return "";
+}
 
 async function generateTemplate() {
   if (!selectedSupplier.value || generating.value) return;
@@ -879,12 +1049,15 @@ async function generateTemplate() {
         })),
       }),
     });
-    const data = (await res.json()) as { suggestions: AISuggestion[] };
+    const data = (await res.json()) as { suggestions: AISuggestion[]; context?: SuggestionContext | null };
     suggestions.value = data.suggestions ?? [];
+    suggestionContext.value = data.context ?? null;
   } catch {
     suggestions.value = [];
+    suggestionContext.value = null;
   } finally {
     generating.value = false;
+    contextOpen.value = false;
     suggestionOpen.value = true;
   }
 }
@@ -907,6 +1080,7 @@ function acceptSuggestion() {
 
 function rejectSuggestion() {
   suggestions.value = [];
+  suggestionContext.value = null;
   suggestionOpen.value = false;
 }
 

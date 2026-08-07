@@ -1,0 +1,34 @@
+name: Automaten Snapshot
+
+on:
+  schedule:
+    # Every 3 hours, 05:00–20:00 UTC — 07:00–22:00 Europe/Brussels in summer,
+    # 06:00–21:00 in winter. GitHub cron has no time zone of its own.
+    - cron: '0 5,8,11,14,17,20 * * *'
+  workflow_dispatch: # Allow manual trigger
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    env:
+      BASE_URL: ${{ secrets.APP_BASE_URL || 'https://bellegemsfriethuisje.be' }}
+    steps:
+      - name: Snapshot every machine
+        run: |
+          failed=0
+          for machine in 4820 5122 5317; do
+            body=$(mktemp)
+            status=$(curl -s -o "$body" -w "%{http_code}" --max-time 90 \
+              -X POST "$BASE_URL/api/automaten/snapshot" \
+              -H "Content-Type: application/json" \
+              -H "X-Cron-Secret: ${{ secrets.CRON_SECRET }}" \
+              -d "{\"machine\":\"$machine\"}")
+            echo "Machine $machine → HTTP $status: $(cat "$body")"
+            if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then
+              failed=1
+            fi
+          done
+          if [ "$failed" -ne 0 ]; then
+            echo "At least one machine failed to snapshot"
+            exit 1
+          fi

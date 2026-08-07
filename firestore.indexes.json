@@ -7,6 +7,22 @@
         { "fieldPath": "status", "order": "ASCENDING" },
         { "fieldPath": "createdAt", "order": "DESCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "automaat_snapshots",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "machine", "order": "ASCENDING" },
+        { "fieldPath": "scrapedAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "automaat_snapshots",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "machine", "order": "ASCENDING" },
+        { "fieldPath": "scrapedAt", "order": "ASCENDING" }
+      ]
     }
   ],
   "fieldOverrides": []

@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { adminAuth, db } from "../firebase-admin";
-import { getMessaging } from "firebase-admin/messaging";
+import { sendPushNotification } from "../lib/push";
 import nodemailer from "nodemailer";
 
 const MIN_PERSONS = 10;
@@ -25,37 +25,6 @@ const mailTransporter = nodemailer.createTransport({
     pass: process.env.SMTP_PASS,
   },
 });
-
-async function sendPushNotification(title: string, body: string) {
-  try {
-    const tokensSnapshot = await db.collection("push_tokens").where("role", "==", "kassa").get();
-
-    const tokens = tokensSnapshot.docs.map((doc) => doc.data().token);
-
-    if (tokens.length === 0) return;
-
-    const message = {
-      notification: { title, body },
-      tokens,
-    };
-
-    const response = await getMessaging().sendEachForMulticast(message);
-    console.log(`Successfully sent ${response.successCount} push notifications to kassa devices`);
-
-    // Cleanup invalid tokens
-    if (response.failureCount > 0) {
-      const batch = db.batch();
-      response.responses.forEach((resp, idx) => {
-        if (!resp.success) {
-          batch.delete(db.collection("push_tokens").doc(tokens[idx]));
-        }
-      });
-      await batch.commit();
-    }
-  } catch (err) {
-    console.error("Failed to send push notifications:", err);
-  }
-}
 
 // ─── Auth middleware for protected routes ─────────────────────────────────────
 const authMiddleware = async (c: any, next: any) => {

@@ -192,6 +192,8 @@ import {
   Calendar,
   Sparkles,
   FileText,
+  Euro,
+  Boxes,
 } from "lucide-vue-next";
 
 // ─── What's new ───────────────────────────────────────────────────────────────
@@ -312,6 +314,8 @@ const allNav = [
   { label: "Reservaties", url: "/reservations", icon: Calendar },
   { label: "Sollicitaties", url: "/sollicitaties", icon: FileText },
   { label: "Suppliers", url: "/suppliers", icon: Truck },
+  { label: "Uitgaven", url: "/analytics", icon: Euro },
+  { label: "Inventaris", url: "/inventory", icon: Boxes },
   { label: "History", url: "/history", icon: History },
   { label: "Automaten", url: "/automaten", icon: Bot },
   { label: "Video Creator", url: "/video", icon: Film },

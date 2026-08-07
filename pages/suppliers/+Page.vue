@@ -190,10 +190,66 @@
               {{ productSearch ? `${filteredProducts.length} of ${products.length}` : products.length }}
               product{{ products.length !== 1 ? "s" : "" }}
             </p>
+            <Button v-if="products.length > 0" size="sm" variant="outline" @click="openBulkPrices">
+              <Euro class="mr-1.5 size-3.5" />
+              Prijzen bewerken
+            </Button>
             <Button size="sm" @click="openAddProduct">
               <Plus class="mr-1.5 size-3.5" />
               Add product
             </Button>
+          </div>
+        </div>
+
+        <!-- ─── Bulk price entry ──────────────────────────────────────────────
+             A flat editable price column for every product, saved in one request.
+             Filling prices one side-panel at a time is unbearable for a first run. -->
+        <div v-if="bulkPriceMode" class="flex flex-col gap-3 rounded-lg border bg-muted/30 p-4">
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <p class="text-sm font-semibold">Prijzen bewerken</p>
+              <p class="text-xs text-muted-foreground">
+                Kostprijs excl. btw. Alleen gewijzigde prijzen komen in de prijshistoriek.
+              </p>
+            </div>
+            <div class="flex gap-2">
+              <Button size="sm" variant="outline" :disabled="bulkSaving" @click="cancelBulkPrices">Annuleren</Button>
+              <Button size="sm" :disabled="bulkSaving" @click="saveBulkPrices">
+                <Loader2 v-if="bulkSaving" class="mr-1.5 size-3.5 animate-spin" />
+                Opslaan
+              </Button>
+            </div>
+          </div>
+
+          <p v-if="bulkError" class="text-sm text-destructive">{{ bulkError }}</p>
+
+          <div class="flex max-h-96 flex-col divide-y overflow-y-auto rounded-md border bg-background">
+            <div
+              v-for="product in products"
+              :key="product.id"
+              class="flex items-center gap-3 px-3 py-2"
+            >
+              <div class="min-w-0 flex-1">
+                <p class="truncate text-sm font-medium">{{ product.internalName }}</p>
+                <p v-if="product.internalName !== product.supplierName" class="truncate text-xs text-muted-foreground">
+                  {{ product.supplierName }}
+                </p>
+              </div>
+              <select
+                v-model="bulkPrices[product.id].priceUnit"
+                class="h-9 shrink-0 rounded-md border border-input bg-background px-2 text-sm"
+              >
+                <option v-for="u in PRICE_UNITS" :key="u.value" :value="u.value">{{ u.label }}</option>
+              </select>
+              <Input
+                v-model.number="bulkPrices[product.id].price"
+                type="number"
+                min="0"
+                step="0.01"
+                placeholder="0.00"
+                class="h-9 w-28 shrink-0 text-right"
+              />
+            </div>
           </div>
         </div>
 
@@ -242,6 +298,11 @@
               </div>
               <div class="mt-3 flex flex-wrap gap-2 text-sm">
                 <div class="text-muted-foreground">
+                  Prijs:
+                  <span class="font-medium text-foreground">{{ formatPrice(product.price) }}</span>
+                  <span v-if="product.price">/{{ product.priceUnit || "stuk" }}</span>
+                </div>
+                <div class="text-muted-foreground">
                   Stock: <span class="font-medium text-foreground">{{ product.idealStock }}</span>
                 </div>
                 <div class="text-muted-foreground">
@@ -265,6 +326,7 @@
               <TableHead class="w-8" />
               <TableHead>Supplier name</TableHead>
               <TableHead>Our name</TableHead>
+              <TableHead class="text-right">Prijs</TableHead>
               <TableHead>Ideal stock</TableHead>
               <TableHead>Manual</TableHead>
               <TableHead>Status</TableHead>
@@ -282,13 +344,13 @@
           >
             <template #header>
               <tr v-if="productsLoading">
-                <td colspan="7" class="p-4 text-center text-sm text-muted-foreground">Loading...</td>
+                <td colspan="8" class="p-4 text-center text-sm text-muted-foreground">Loading...</td>
               </tr>
               <tr v-else-if="products.length === 0">
-                <td colspan="7" class="p-4 text-center text-sm text-muted-foreground">No products yet.</td>
+                <td colspan="8" class="p-4 text-center text-sm text-muted-foreground">No products yet.</td>
               </tr>
               <tr v-else-if="productSearch && filteredProducts.length === 0">
-                <td colspan="7" class="p-4 text-center text-sm text-muted-foreground">
+                <td colspan="8" class="p-4 text-center text-sm text-muted-foreground">
                   No products match your search.
                 </td>
               </tr>
@@ -303,6 +365,12 @@
                 </td>
                 <td class="p-4 align-middle font-medium">{{ product.supplierName }}</td>
                 <td class="p-4 align-middle text-muted-foreground">{{ product.internalName }}</td>
+                <td class="p-4 align-middle text-right tabular-nums">
+                  <span :class="!product.price && 'text-muted-foreground'">{{ formatPrice(product.price) }}</span>
+                  <span v-if="product.price" class="text-xs text-muted-foreground">
+                    /{{ product.priceUnit || "stuk" }}
+                  </span>
+                </td>
                 <td class="p-4 align-middle">{{ product.idealStock }}</td>
                 <td class="p-4 align-middle">
                   <Badge :variant="product.manualOrder ? 'default' : 'secondary'">
@@ -359,6 +427,51 @@
         <div class="flex flex-col gap-1.5">
           <label class="text-sm font-medium">Ideal stock</label>
           <Input v-model.number="productForm.idealStock" type="number" min="0" placeholder="0" />
+        </div>
+        <div class="flex flex-col gap-1.5">
+          <label class="text-sm font-medium">Eenheid</label>
+          <div class="flex flex-wrap gap-1.5">
+            <button
+              v-for="u in PRICE_UNITS"
+              :key="u.value"
+              type="button"
+              class="rounded-md border px-2.5 py-1 text-sm transition-colors"
+              :class="
+                productForm.priceUnit === u.value
+                  ? 'border-primary bg-primary text-primary-foreground'
+                  : 'border-border bg-background text-foreground hover:bg-muted'
+              "
+              @click="productForm.priceUnit = u.value"
+            >
+              {{ u.label }}
+            </button>
+          </div>
+        </div>
+        <div class="flex flex-col gap-1.5">
+          <label class="text-sm font-medium">Prijs per {{ productForm.priceUnit }} (€, excl. btw)</label>
+          <Input v-model.number="productForm.price" type="number" min="0" step="0.01" placeholder="0.00" />
+        </div>
+        <div :class="['flex flex-col gap-1.5', isDesktop && 'col-span-2']">
+          <label class="text-sm font-medium">URL leverancier</label>
+          <div class="flex gap-1.5">
+            <Input v-model="productForm.supplierUrl" placeholder="https://…" class="min-w-0 flex-1" />
+            <Button
+              type="button"
+              variant="outline"
+              class="shrink-0"
+              :disabled="!productForm.supplierUrl || scrapingPrice"
+              @click="scrapePrice"
+            >
+              <Loader2 v-if="scrapingPrice" class="mr-1.5 size-4 animate-spin" />
+              <RefreshCw v-else class="mr-1.5 size-4" />
+              Prijs ophalen
+            </Button>
+          </div>
+          <p v-if="scrapeError" class="text-xs text-destructive">{{ scrapeError }}</p>
+          <p v-else-if="scrapeRaw" class="text-xs text-muted-foreground">
+            Gevonden op de pagina: <span class="font-medium text-foreground">{{ scrapeRaw }}</span> — controleer en druk
+            op Save.
+          </p>
         </div>
         <div class="flex items-center gap-2">
           <Checkbox id="product-manual" v-model="productForm.manualOrder" />
@@ -418,6 +531,8 @@ import {
   ArrowUp,
   ArrowDown,
   GripVertical,
+  RefreshCw,
+  Euro,
 } from "lucide-vue-next";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -461,6 +576,27 @@ interface Product {
   isActive: boolean;
   idealStock: number;
   displayOrder: number;
+  /** Cost price excl. VAT. Products predating pricing have none — treat as 0. */
+  price?: number;
+  priceUnit?: string;
+  supplierUrl?: string;
+  priceHistory?: Array<{ price: number; date: string; source: string }>;
+}
+
+const PRICE_UNITS = [
+  { value: "stuk", label: "stuk" },
+  { value: "kg", label: "kg" },
+  { value: "doos", label: "doos" },
+  { value: "pakket", label: "pakket" },
+  { value: "emmer", label: "emmer" },
+  { value: "liter", label: "liter" },
+  { value: "rol", label: "rol" },
+];
+
+/** € 12,50 — or an em dash when the product has no price yet. */
+function formatPrice(price?: number): string {
+  if (!price) return "—";
+  return `€ ${price.toLocaleString("nl-NL", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
 const { loading: authLoading } = useAuth();
@@ -559,7 +695,88 @@ const productForm = reactive({
   isActive: true,
   idealStock: 0,
   displayOrder: 0,
+  price: 0,
+  priceUnit: "stuk",
+  supplierUrl: "",
 });
+
+// ─── Price scraping ───────────────────────────────────────────────────────────
+const scrapingPrice = ref(false);
+const scrapeError = ref("");
+const scrapeRaw = ref("");
+/** Set once a scrape filled the price field, so the save can tag the history entry. */
+const priceFromScrape = ref(false);
+
+async function scrapePrice() {
+  if (!productForm.supplierUrl || scrapingPrice.value) return;
+  scrapingPrice.value = true;
+  scrapeError.value = "";
+  scrapeRaw.value = "";
+  try {
+    const res = await apiFetch("/api/suppliers/scrape-price", {
+      method: "POST",
+      body: JSON.stringify({ url: productForm.supplierUrl }),
+    });
+    const data = (await res.json()) as { price: number | null; raw: string | null; error?: string };
+    if (data.price !== null) {
+      // Fill the field only — the user still has to press Save.
+      productForm.price = data.price;
+      priceFromScrape.value = true;
+      scrapeRaw.value = data.raw ?? "";
+    } else {
+      scrapeError.value = data.error ?? "Kon geen prijs vinden op deze pagina.";
+    }
+  } catch {
+    scrapeError.value = "Ophalen mislukt.";
+  } finally {
+    scrapingPrice.value = false;
+  }
+}
+
+// ─── Bulk price entry ─────────────────────────────────────────────────────────
+const bulkPriceMode = ref(false);
+const bulkPrices = reactive<Record<string, { price: number; priceUnit: string }>>({});
+const bulkSaving = ref(false);
+const bulkError = ref("");
+
+function openBulkPrices() {
+  for (const key in bulkPrices) delete bulkPrices[key];
+  for (const p of products.value) {
+    bulkPrices[p.id] = { price: p.price ?? 0, priceUnit: p.priceUnit || "stuk" };
+  }
+  bulkError.value = "";
+  bulkPriceMode.value = true;
+}
+
+function cancelBulkPrices() {
+  bulkPriceMode.value = false;
+}
+
+async function saveBulkPrices() {
+  if (!selectedSupplier.value) return;
+  bulkSaving.value = true;
+  bulkError.value = "";
+  try {
+    const payload = products.value.map((p) => ({
+      productId: p.id,
+      price: Number(bulkPrices[p.id]?.price) || 0,
+      priceUnit: bulkPrices[p.id]?.priceUnit || "stuk",
+    }));
+    const res = await apiFetch(`/api/suppliers/${selectedSupplier.value.id}/products/prices`, {
+      method: "PUT",
+      body: JSON.stringify({ prices: payload }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      bulkError.value = (err as any).message ?? `Opslaan mislukt (${res.status})`;
+      return;
+    }
+    bulkPriceMode.value = false;
+    await fetchProducts(selectedSupplier.value.id);
+  } finally {
+    bulkSaving.value = false;
+  }
+}
 
 const deleteProductOpen = ref(false);
 const deleteProductTarget = ref<Product | null>(null);
@@ -671,8 +888,18 @@ function openAddProduct() {
   productForm.isActive = true;
   productForm.idealStock = 0;
   productForm.displayOrder = 0;
+  productForm.price = 0;
+  productForm.priceUnit = "stuk";
+  productForm.supplierUrl = "";
+  resetScrapeState();
   productSaveError.value = "";
   productFormOpen.value = true;
+}
+
+function resetScrapeState() {
+  scrapeError.value = "";
+  scrapeRaw.value = "";
+  priceFromScrape.value = false;
 }
 
 function openEditProduct(product: Product) {
@@ -683,6 +910,10 @@ function openEditProduct(product: Product) {
   productForm.isActive = product.isActive;
   productForm.idealStock = product.idealStock;
   productForm.displayOrder = product.displayOrder;
+  productForm.price = product.price ?? 0;
+  productForm.priceUnit = product.priceUnit || "stuk";
+  productForm.supplierUrl = product.supplierUrl ?? "";
+  resetScrapeState();
   productSaveError.value = "";
   productFormOpen.value = true;
 }
@@ -691,11 +922,14 @@ async function saveProduct() {
   if (!productForm.supplierName || !productForm.internalName || !selectedSupplier.value) return;
   productSaving.value = true;
   productSaveError.value = "";
+  // The server decides whether the price actually moved; we only say where the
+  // number came from so the history entry is labelled correctly.
+  const payload = { ...productForm, priceSource: priceFromScrape.value ? "scrape" : "manual" };
   try {
     if (editingProduct.value) {
       const res = await apiFetch(`/api/suppliers/${selectedSupplier.value.id}/products/${editingProduct.value.id}`, {
         method: "PATCH",
-        body: JSON.stringify(productForm),
+        body: JSON.stringify(payload),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
@@ -708,7 +942,7 @@ async function saveProduct() {
     } else {
       const res = await apiFetch(`/api/suppliers/${selectedSupplier.value.id}/products`, {
         method: "POST",
-        body: JSON.stringify(productForm),
+        body: JSON.stringify(payload),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));

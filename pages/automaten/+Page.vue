@@ -46,7 +46,7 @@
         <p class="text-sm font-medium">{{ error }}</p>
         <button
           class="mt-1 rounded-lg border border-destructive/30 px-4 py-2 text-xs hover:bg-destructive/10 transition-colors"
-          @click="fetchMachine(selectedMachine!)"
+          @click="refreshMachine(selectedMachine!)"
         >
           Opnieuw proberen
         </button>
@@ -91,6 +91,55 @@
           </div>
         </div>
 
+        <!-- Trend strip -->
+        <div class="rounded-xl border bg-card p-5 shadow-sm">
+          <div class="mb-5 flex items-baseline justify-between gap-3">
+            <div>
+              <p class="text-sm font-semibold">Vulling over tijd</p>
+              <p class="text-xs text-muted-foreground">Laatste {{ TREND_DAYS }} dagen</p>
+            </div>
+            <p class="text-xs text-muted-foreground">Laatst gemeten: {{ lastMeasured }}</p>
+          </div>
+
+          <div v-if="isLoadingHistory" class="flex h-24 items-end gap-1">
+            <div
+              v-for="i in TREND_DAYS"
+              :key="i"
+              class="flex-1 animate-pulse rounded-sm bg-muted"
+              :style="{ height: `${20 + ((i * 13) % 60)}px` }"
+            />
+          </div>
+
+          <p v-else-if="!hasTrend" class="py-6 text-center text-xs text-muted-foreground">
+            Nog geen geschiedenis. Metingen worden vanaf nu opgeslagen.
+          </p>
+
+          <div v-else class="flex h-24 items-end gap-1">
+            <div v-for="day in trendData" :key="day.key" class="group flex flex-1 flex-col items-center gap-1">
+              <span
+                class="text-[10px] font-medium text-muted-foreground tabular-nums opacity-0 transition-opacity group-hover:opacity-100"
+              >
+                {{ day.percent !== null ? day.percent + "%" : "" }}
+              </span>
+              <div
+                class="w-full rounded-sm transition-all"
+                :class="day.isToday ? 'bg-primary' : 'bg-primary/40 hover:bg-primary/60'"
+                :style="{
+                  height: day.percent !== null ? `${Math.max(3, (day.percent / 100) * 68)}px` : '3px',
+                  opacity: day.percent !== null ? undefined : '0.2',
+                }"
+                :title="day.percent !== null ? `${day.fullLabel}: ${day.percent}% gevuld` : `${day.fullLabel}: geen meting`"
+              />
+              <span
+                class="text-[10px] text-muted-foreground"
+                :class="{ 'font-semibold text-foreground': day.isToday }"
+              >
+                {{ day.label }}
+              </span>
+            </div>
+          </div>
+        </div>
+
         <!-- Main content + missing panel -->
         <div class="flex flex-col gap-6 lg:flex-row lg:items-start">
 
@@ -116,10 +165,16 @@
 
             <!-- Item grid -->
             <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-              <div
+              <button
                 v-for="item in filteredItems"
                 :key="item.name"
-                :class="['flex flex-col gap-2 rounded-xl border bg-card p-4 shadow-sm', statusBorder(item)]"
+                type="button"
+                :title="`Bekijk de geschiedenis van ${item.name}`"
+                @click="openSlotDetail(item)"
+                :class="[
+                  'flex flex-col gap-2 rounded-xl border bg-card p-4 text-left shadow-sm transition-colors hover:border-primary/50 hover:bg-muted/40',
+                  statusBorder(item),
+                ]"
               >
                 <div class="flex items-start justify-between gap-2">
                   <p class="text-sm font-medium leading-snug">{{ item.name }}</p>
@@ -133,17 +188,21 @@
                     :style="{ width: stockPercent(item) + '%' }"
                   />
                 </div>
-                <p class="text-xs text-muted-foreground tabular-nums">
-                  {{ item.number }} / {{ item.total }}
-                  <span class="ml-1 opacity-70">({{ item.total - item.number }} ontbreekt)</span>
-                </p>
-              </div>
+                <div class="flex items-center justify-between gap-2">
+                  <p class="text-xs text-muted-foreground tabular-nums">
+                    {{ item.number }} / {{ item.total }}
+                    <span class="ml-1 opacity-70">({{ item.total - item.number }} ontbreekt)</span>
+                  </p>
+                  <p :class="['shrink-0 text-xs tabular-nums', forecastClass(item)]">{{ forecastLabel(item) }}</p>
+                </div>
+              </button>
             </div>
 
             <!-- Last refreshed -->
             <p class="text-xs text-muted-foreground">
-              Laatste update: {{ lastRefreshed }}
-              <button class="ml-2 underline-offset-2 hover:underline" @click="fetchMachine(selectedMachine!)">
+              Laatst gemeten: {{ lastMeasured }}
+              <span class="opacity-60">(opgehaald {{ lastRefreshed }})</span>
+              <button class="ml-2 underline-offset-2 hover:underline" @click="refreshMachine(selectedMachine!)">
                 Vernieuwen
               </button>
             </p>
@@ -211,14 +270,100 @@
       </template>
     </div>
   </TopLoader>
+
+  <!-- Slot history — Dialog on desktop, Drawer on mobile -->
+  <component :is="isDesktop ? Dialog : Drawer" v-model:open="detailOpen">
+    <component :is="isDesktop ? DialogContent : DrawerContent" :class="isDesktop ? 'sm:max-w-lg' : ''">
+      <component :is="isDesktop ? DialogHeader : DrawerHeader">
+        <component :is="isDesktop ? DialogTitle : DrawerTitle">{{ detailItem?.name }}</component>
+        <component :is="isDesktop ? DialogDescription : DrawerDescription">
+          Voorraad van de laatste {{ HISTORY_DAYS }} dagen
+        </component>
+      </component>
+
+      <div :class="['flex flex-col gap-4', !isDesktop && 'px-4 pb-6']">
+        <!-- Forecast summary -->
+        <div v-if="detailItem" class="grid grid-cols-3 gap-2 text-center">
+          <div class="rounded-lg border bg-muted/30 px-2 py-2">
+            <p class="text-sm font-bold tabular-nums leading-none">{{ detailItem.number }} / {{ detailItem.total }}</p>
+            <p class="mt-1 text-[11px] text-muted-foreground">Nu</p>
+          </div>
+          <div class="rounded-lg border bg-muted/30 px-2 py-2">
+            <p class="text-sm font-bold tabular-nums leading-none">{{ depletionLabel }}</p>
+            <p class="mt-1 text-[11px] text-muted-foreground">Per dag</p>
+          </div>
+          <div class="rounded-lg border bg-muted/30 px-2 py-2">
+            <p :class="['text-sm font-bold leading-none', forecastClass(detailItem)]">{{ forecastLabel(detailItem) }}</p>
+            <p class="mt-1 text-[11px] text-muted-foreground">Prognose</p>
+          </div>
+        </div>
+
+        <p v-if="detailError" class="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+          {{ detailError }}
+        </p>
+
+        <div v-else-if="isLoadingDetail" class="flex h-28 items-center justify-center text-muted-foreground">
+          <Loader2 class="size-5 animate-spin" />
+        </div>
+
+        <p v-else-if="detailChart.length === 0" class="py-8 text-center text-xs text-muted-foreground">
+          Nog geen metingen voor dit vak.
+        </p>
+
+        <div v-else class="flex h-28 items-end gap-0.5 overflow-x-auto">
+          <div
+            v-for="point in detailChart"
+            :key="point.key"
+            class="group flex min-w-[6px] flex-1 flex-col items-center justify-end gap-1"
+            :title="`${point.label}: ${point.number} / ${point.total} (${point.percent}%)`"
+          >
+            <div
+              class="w-full rounded-sm bg-primary/40 transition-all group-hover:bg-primary/70"
+              :style="{ height: `${Math.max(3, (point.percent / 100) * 88)}px` }"
+            />
+          </div>
+        </div>
+
+        <p v-if="detailChart.length > 0" class="flex justify-between text-[10px] text-muted-foreground">
+          <span>{{ detailChart[0].label }}</span>
+          <span>{{ detailChart[detailChart.length - 1].label }}</span>
+        </p>
+      </div>
+    </component>
+  </component>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from "vue";
+import { ref, computed, onMounted, onUnmounted } from "vue";
 import { Bot, AlertCircle, PackageX, PackageMinus, PackageCheck, Printer, Loader2 } from "lucide-vue-next";
+import { useMediaQuery } from "@vueuse/core";
 import TopLoader from "@/components/ui/top-loader/TopLoader.vue";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  Drawer,
+  DrawerContent,
+  DrawerDescription,
+  DrawerHeader,
+  DrawerTitle,
+} from "@/components/ui/drawer";
 import { apiFetch } from "@/lib/apiFetch";
 import { usePrinterSettings } from "@/lib/usePrinterSettings";
+import {
+  MACHINE_CODES,
+  MACHINE_NAMES,
+  dayKeyOf,
+  fillPercent,
+  mergeItems,
+  slotStatus,
+  type MachineCode,
+  type MachineItem,
+} from "@/lib/automaten";
 import { Printer as ThermalPrinter } from "@node-escpos/core";
 // Trailing slash forces the npm polyfill rather than the Node built-in.
 import { Buffer } from "buffer/";
@@ -226,23 +371,18 @@ import { Buffer } from "buffer/";
 const { printerIp, loadPrinterConfig } = usePrinterSettings();
 const isPrinting = ref(false);
 const printError = ref<string | null>(null);
+const isDesktop = useMediaQuery("(min-width: 768px)");
 
-onMounted(() => void loadPrinterConfig());
+// Ticks the "Laatst gemeten" label. Started in onMounted because this page is
+// server-rendered and there is no window during SSR.
+const now = ref(Date.now());
+let nowTimer: ReturnType<typeof setInterval> | undefined;
 
-interface MachineItem {
-  name: string;
-  number: number;
-  total: number;
-}
-
-const MACHINE_CODES = ["4820", "5122", "5317"] as const;
-type MachineCode = (typeof MACHINE_CODES)[number];
-
-const MACHINE_NAMES: Record<MachineCode, string> = {
-  "4820": "Plats - schotels",
-  "5122": "Automaat binnen",
-  "5317": "Drankjesautomaat",
-};
+onMounted(() => {
+  void loadPrinterConfig();
+  nowTimer = setInterval(() => (now.value = Date.now()), 30_000);
+});
+onUnmounted(() => clearInterval(nowTimer));
 
 const FILTER_TABS = computed(() => [
   { label: "Alles", value: "all" as const, count: items.value.length },
@@ -256,27 +396,16 @@ const isFetching = ref(false);
 const error = ref<string | null>(null);
 const items = ref<MachineItem[]>([]);
 const lastRefreshed = ref("");
+const scrapedAt = ref<string | null>(null);
 const activeFilter = ref<"all" | "empty" | "low" | "ok">("all");
 
 // ─── Merge same-name items ────────────────────────────────────────────────────
-const mergedItems = computed(() => {
-  const map = new Map<string, MachineItem>();
-  for (const item of items.value) {
-    const existing = map.get(item.name);
-    if (existing) {
-      existing.number += item.number;
-      existing.total += item.total;
-    } else {
-      map.set(item.name, { ...item });
-    }
-  }
-  return Array.from(map.values());
-});
+const mergedItems = computed(() => mergeItems(items.value));
 
 // ─── Derived counts ───────────────────────────────────────────────────────────
-const emptyCount = computed(() => mergedItems.value.filter((i) => i.number === 0).length);
-const lowCount = computed(() => mergedItems.value.filter((i) => i.number > 0 && i.number < i.total).length);
-const okCount = computed(() => mergedItems.value.filter((i) => i.number === i.total).length);
+const emptyCount = computed(() => mergedItems.value.filter((i) => slotStatus(i) === "empty").length);
+const lowCount = computed(() => mergedItems.value.filter((i) => slotStatus(i) === "low").length);
+const okCount = computed(() => mergedItems.value.filter((i) => slotStatus(i) === "ok").length);
 
 const missingItems = computed(() =>
   mergedItems.value
@@ -290,16 +419,11 @@ const missingItems = computed(() =>
 );
 
 const filteredItems = computed(() => {
-  let list = mergedItems.value;
-  if (activeFilter.value === "empty") list = list.filter((i) => i.number === 0);
-  else if (activeFilter.value === "low") list = list.filter((i) => i.number > 0 && i.number < i.total);
-  else if (activeFilter.value === "ok") list = list.filter((i) => i.number === i.total);
+  const rank = (i: MachineItem) => (slotStatus(i) === "empty" ? 0 : slotStatus(i) === "low" ? 1 : 2);
+  const list =
+    activeFilter.value === "all" ? mergedItems.value : mergedItems.value.filter((i) => slotStatus(i) === activeFilter.value);
   // Sort: empty first, then low, then ok
-  return [...list].sort((a, b) => {
-    const rankA = a.number === 0 ? 0 : a.number < a.total ? 1 : 2;
-    const rankB = b.number === 0 ? 0 : b.number < b.total ? 1 : 2;
-    return rankA - rankB;
-  });
+  return [...list].sort((a, b) => rank(a) - rank(b));
 });
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -309,34 +433,203 @@ function stockPercent(item: MachineItem) {
 }
 
 function statusLabel(item: MachineItem) {
-  if (item.number === 0) return "Leeg";
-  if (item.number < item.total) return "Laag";
-  return "OK";
+  const status = slotStatus(item);
+  return status === "empty" ? "Leeg" : status === "low" ? "Laag" : "OK";
 }
 
 function statusBadge(item: MachineItem) {
-  if (item.number === 0) return "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400";
-  if (item.number < item.total) return "bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-400";
+  const status = slotStatus(item);
+  if (status === "empty") return "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400";
+  if (status === "low") return "bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-400";
   return "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400";
 }
 
 function statusBorder(item: MachineItem) {
-  if (item.number === 0) return "border-red-200 dark:border-red-800/50";
-  if (item.number < item.total) return "border-orange-200 dark:border-orange-800/50";
+  const status = slotStatus(item);
+  if (status === "empty") return "border-red-200 dark:border-red-800/50";
+  if (status === "low") return "border-orange-200 dark:border-orange-800/50";
   return "";
 }
 
 function progressColor(item: MachineItem) {
-  if (item.number === 0) return "bg-red-500";
-  if (item.number < item.total) return "bg-orange-400";
+  const status = slotStatus(item);
+  if (status === "empty") return "bg-red-500";
+  if (status === "low") return "bg-orange-400";
   return "bg-green-500";
+}
+
+function relativeTime(iso: string | null) {
+  if (!iso) return "onbekend";
+  const minutes = Math.round((now.value - Date.parse(iso)) / 60_000);
+  if (!Number.isFinite(minutes)) return "onbekend";
+  if (minutes < 1) return "net nu";
+  if (minutes < 60) return `${minutes} min geleden`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours} uur geleden`;
+  const days = Math.round(hours / 24);
+  return `${days} ${days === 1 ? "dag" : "dagen"} geleden`;
+}
+
+const lastMeasured = computed(() => relativeTime(scrapedAt.value));
+
+// ─── History, trend & forecast ────────────────────────────────────────────────
+const HISTORY_DAYS = 30;
+const TREND_DAYS = 14;
+
+interface HistorySnapshot {
+  scrapedAt: string;
+  dayKey: string;
+  totalFilled: number;
+  totalCapacity: number;
+  emptyCount: number;
+  lowCount: number;
+}
+
+interface SlotForecast {
+  name: string;
+  number: number;
+  total: number;
+  depletionPerDay: number | null;
+  emptyEta: string | null;
+}
+
+const history = ref<HistorySnapshot[]>([]);
+const slotForecasts = ref<SlotForecast[]>([]);
+const isLoadingHistory = ref(false);
+
+const forecastByName = computed(() => new Map(slotForecasts.value.map((f) => [f.name, f])));
+
+/** One bar per calendar day: fill percentage of that day's last snapshot. */
+const trendData = computed(() => {
+  const lastPerDay = new Map<string, HistorySnapshot>();
+  // history is chronological, so the last write for a day wins.
+  for (const snapshot of history.value) lastPerDay.set(snapshot.dayKey, snapshot);
+
+  const today = new Date();
+  return Array.from({ length: TREND_DAYS }, (_, index) => {
+    const date = new Date(today);
+    date.setDate(today.getDate() - (TREND_DAYS - 1 - index));
+    const snapshot = lastPerDay.get(dayKeyOf(date));
+    return {
+      key: dayKeyOf(date),
+      label: date.toLocaleDateString("nl-BE", { weekday: "short" }).slice(0, 2),
+      fullLabel: date.toLocaleDateString("nl-BE", { day: "numeric", month: "short" }),
+      percent: snapshot ? fillPercent(snapshot) : null,
+      isToday: index === TREND_DAYS - 1,
+    };
+  });
+});
+
+const hasTrend = computed(() => trendData.value.some((d) => d.percent !== null));
+
+/** Days until the slot is projected to be empty, or null when there is no forecast. */
+function forecastDays(item: MachineItem): number | null {
+  const eta = forecastByName.value.get(item.name)?.emptyEta;
+  if (!eta) return null;
+  const days = (Date.parse(eta) - now.value) / 86_400_000;
+  return Number.isFinite(days) ? Math.max(0, days) : null;
+}
+
+function forecastLabel(item: MachineItem) {
+  if (slotStatus(item) === "empty") return "Nu leeg";
+  const days = forecastDays(item);
+  if (days === null) return "Leeg over ~? dagen";
+  if (days < 1) return "Leeg binnen 1 dag";
+  const rounded = Math.round(days);
+  return `Leeg over ~${rounded} ${rounded === 1 ? "dag" : "dagen"}`;
+}
+
+function forecastClass(item: MachineItem) {
+  if (slotStatus(item) === "empty") return "text-red-600 dark:text-red-400 font-medium";
+  const days = forecastDays(item);
+  if (days === null) return "text-muted-foreground/40";
+  return days < 2 ? "text-red-600 dark:text-red-400 font-medium" : "text-muted-foreground";
+}
+
+async function fetchHistory(code: MachineCode) {
+  isLoadingHistory.value = true;
+  history.value = [];
+  slotForecasts.value = [];
+
+  try {
+    const res = await apiFetch(`/api/automaten/history?machine=${code}&days=${HISTORY_DAYS}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = (await res.json()) as { snapshots: HistorySnapshot[]; slots: SlotForecast[] };
+    history.value = data.snapshots;
+    slotForecasts.value = data.slots;
+  } catch (e) {
+    // History is a nice-to-have: the live stock table must still render.
+    console.error("[automaten] Kon geschiedenis niet laden", e);
+  } finally {
+    isLoadingHistory.value = false;
+  }
+}
+
+// ─── Slot detail drawer ───────────────────────────────────────────────────────
+interface SlotPoint {
+  scrapedAt: string;
+  number: number;
+  total: number;
+}
+
+const detailOpen = ref(false);
+const detailItem = ref<MachineItem | null>(null);
+const detailPoints = ref<SlotPoint[]>([]);
+const detailForecast = ref<{ depletionPerDay: number | null; emptyEta: string | null } | null>(null);
+const isLoadingDetail = ref(false);
+const detailError = ref<string | null>(null);
+
+/** 30 days of scrapes is far too many bars — collapse to the last one per day. */
+const detailChart = computed(() => {
+  const lastPerDay = new Map<string, SlotPoint>();
+  for (const point of detailPoints.value) lastPerDay.set(dayKeyOf(point.scrapedAt), point);
+  return Array.from(lastPerDay.values()).map((point) => ({
+    key: point.scrapedAt,
+    percent: point.total === 0 ? 0 : Math.round((point.number / point.total) * 100),
+    number: point.number,
+    total: point.total,
+    label: new Date(point.scrapedAt).toLocaleDateString("nl-BE", { day: "numeric", month: "short" }),
+  }));
+});
+
+const depletionLabel = computed(() => {
+  const rate = detailForecast.value?.depletionPerDay;
+  return rate === null || rate === undefined ? "—" : rate.toFixed(1);
+});
+
+async function openSlotDetail(item: MachineItem) {
+  if (!selectedMachine.value) return;
+  detailItem.value = item;
+  detailOpen.value = true;
+  detailPoints.value = [];
+  detailForecast.value = null;
+  detailError.value = null;
+  isLoadingDetail.value = true;
+
+  try {
+    const res = await apiFetch(
+      `/api/automaten/history/slot?machine=${selectedMachine.value}&name=${encodeURIComponent(item.name)}&days=${HISTORY_DAYS}`,
+    );
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = (await res.json()) as {
+      points: SlotPoint[];
+      depletionPerDay: number | null;
+      emptyEta: string | null;
+    };
+    detailPoints.value = data.points;
+    detailForecast.value = { depletionPerDay: data.depletionPerDay, emptyEta: data.emptyEta };
+  } catch {
+    detailError.value = "Kon de geschiedenis van dit vak niet laden.";
+  } finally {
+    isLoadingDetail.value = false;
+  }
 }
 
 // ─── Fetch ────────────────────────────────────────────────────────────────────
 async function selectMachine(code: MachineCode) {
   selectedMachine.value = code;
   activeFilter.value = "all";
-  await fetchMachine(code);
+  await Promise.all([fetchMachine(code), fetchHistory(code)]);
 }
 
 async function fetchMachine(code: MachineCode) {
@@ -350,14 +643,19 @@ async function fetchMachine(code: MachineCode) {
       const body = await res.json().catch(() => ({}));
       throw new Error((body as any)?.message ?? `HTTP ${res.status}`);
     }
-    const data = (await res.json()) as { ok: boolean; items: MachineItem[] };
+    const data = (await res.json()) as { ok: boolean; items: MachineItem[]; scrapedAt?: string };
     items.value = data.items;
+    scrapedAt.value = data.scrapedAt ?? new Date().toISOString();
     lastRefreshed.value = new Date().toLocaleTimeString("nl-BE");
   } catch (e: any) {
     error.value = e?.message ?? "Onbekende fout. Probeer opnieuw.";
   } finally {
     isFetching.value = false;
   }
+}
+
+async function refreshMachine(code: MachineCode) {
+  await Promise.all([fetchMachine(code), fetchHistory(code)]);
 }
 
 // ─── Printer transport ────────────────────────────────────────────────────────
