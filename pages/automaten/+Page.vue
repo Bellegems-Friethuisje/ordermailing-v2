@@ -364,9 +364,13 @@ import {
   type MachineCode,
   type MachineItem,
 } from "@/lib/automaten";
-import { Printer as ThermalPrinter } from "@node-escpos/core";
-// Trailing slash forces the npm polyfill rather than the Node built-in.
-import { Buffer } from "buffer/";
+// The ESC/POS builder and its Buffer polyfill are only reachable through the
+// print button, so both are imported on demand in printPickList() below rather than
+// shipped in this page's chunk. Trailing slash forces the npm polyfill rather
+// than the Node built-in.
+import type { Buffer as NodeBuffer } from "buffer/";
+
+type PrinterAdapter = ConstructorParameters<typeof import("@node-escpos/core").Printer>[0];
 
 const { printerIp, loadPrinterConfig } = usePrinterSettings();
 const isPrinting = ref(false);
@@ -694,7 +698,7 @@ function createHttpAdapter(ip: string) {
 
   return {
     open: (cb?: (e: Error | null) => void) => cb?.(null),
-    write: (data: Buffer, cb?: (e: Error | null) => void) => {
+    write: (data: NodeBuffer, cb?: (e: Error | null) => void) => {
       void send(data).then(
         () => cb?.(null),
         (e) => cb?.(e instanceof Error ? e : new Error(String(e))),
@@ -702,7 +706,7 @@ function createHttpAdapter(ip: string) {
     },
     close: (cb?: (e: Error | null) => void) => cb?.(null),
     read: () => {},
-  } as unknown as ConstructorParameters<typeof ThermalPrinter>[0];
+  } as unknown as PrinterAdapter;
 }
 
 // ─── Print pick list (pluklijst) to thermal printer ──────────────────────────
@@ -718,6 +722,11 @@ async function printPickList() {
   if (missingItems.value.length === 0) return;
 
   isPrinting.value = true;
+
+  const [{ Printer: ThermalPrinter }, { Buffer }] = await Promise.all([
+    import("@node-escpos/core"),
+    import("buffer/"),
+  ]);
 
   // iconv-lite and mutable-buffer reach for Buffer as a global.
   (globalThis as { Buffer?: unknown }).Buffer ??= Buffer;

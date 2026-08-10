@@ -16,8 +16,6 @@ const authMiddleware = async (c: any, next: any) => {
     const idToken = authorization.slice(7);
     const decoded = await adminAuth.verifyIdToken(idToken);
     c.set("uid", decoded.uid);
-    const userDoc = await db.collection("users").doc(decoded.uid).get();
-    c.set("role", userDoc.exists ? (userDoc.data()?.role ?? "user") : "user");
   } catch {
     throw new HTTPException(401, { message: "Invalid or expired token" });
   }

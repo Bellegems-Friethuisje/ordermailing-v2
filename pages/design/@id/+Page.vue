@@ -819,7 +819,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, nextTick, watch } from "vue";
 import { apiFetch } from "@/lib/apiFetch";
-import { removeBackground } from "@imgly/background-removal";
 import myriadProUrl from "@/assets/MyriadPro-Black.otf?url";
 import { usePageContext } from "vike-vue/usePageContext";
 import {
@@ -1994,7 +1993,10 @@ async function removeBg() {
     const origNw = origImg.naturalWidth,
       origNh = origImg.naturalHeight;
 
-    // 1. Run AI background removal
+    // 1. Run AI background removal. The model runtime is several megabytes, so it
+    //    is pulled in here rather than at module scope — opening the editor no
+    //    longer downloads it, only actually removing a background does.
+    const { removeBackground } = await import("@imgly/background-removal");
     const resultBlob = await removeBackground(el.src);
 
     // 2. Draw on canvas to find tight non-transparent crop
