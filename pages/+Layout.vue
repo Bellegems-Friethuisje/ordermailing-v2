@@ -7,7 +7,7 @@
   </template>
 
   <!-- Authenticated layout with sidebar -->
-  <SidebarProvider v-else-if="!loading" class="h-svh">
+  <SidebarProvider v-else-if="shellReady" class="h-svh">
     <Sidebar collapsible="icon">
       <SidebarHeader>
         <SidebarMenu>
@@ -253,26 +253,52 @@ import { useTheme } from "@/lib/useTheme";
 sentryBrowserConfig();
 
 const pageContext = usePageContext();
-const { currentUser, userRole, loading, signOut } = useAuth();
+const { currentUser, userRole, loading, roleLoading, signOut } = useAuth();
 const { initTheme } = useTheme();
 
 // ─── Auth guard & Role-based Redirection ──────────────────────────────────────
 const PUBLIC_PATHS = ["/login", "/register"];
 const isPublicPage = computed(() => PUBLIC_PATHS.some((p) => pageContext.urlPathname.startsWith(p)));
 
-watch([loading, userRole], ([isLoading, role]) => {
-  if (isLoading || typeof window === "undefined") return;
-  const path = window.location.pathname;
+// Paths a plain "user" may open — i.e. the ones no role gets redirected away from.
+const ALLOWED_FOR_USER = ["/", "/orders/new", "/orders", "/reservations", "/automaten", "/settings"];
 
-  if (!currentUser.value) {
+function isAllowedForUser(path: string): boolean {
+  return ALLOWED_FOR_USER.some((allowed) => path === allowed || (allowed !== "/" && path.startsWith(allowed)));
+}
+
+// When the shell may render — and so when the page below it mounts and fires its
+// first request.
+//
+// On an unrestricted path that is as soon as the session resolves, which takes
+// the role lookup off the critical path of the pages that get the most traffic.
+// A restricted path still waits for the role, so nothing renders that the
+// redirect below is about to take away.
+const shellReady = computed(() => {
+  if (loading.value) return false;
+  if (!roleLoading.value) return true;
+  return typeof window !== "undefined" && isAllowedForUser(window.location.pathname);
+});
+
+// Bouncing a signed-out visitor only needs the auth state, so it no longer waits
+// on the role lookup — the sooner this fires, the sooner /login starts loading.
+watch(
+  loading,
+  (isLoading) => {
+    if (isLoading || typeof window === "undefined" || currentUser.value) return;
+    const path = window.location.pathname;
     if (!PUBLIC_PATHS.some((p) => path.startsWith(p))) {
       sessionStorage.setItem("intended_url", path);
       window.location.href = "/login";
     }
-    return;
-  }
+  },
+  { immediate: true },
+);
 
-  // Role-based redirection logic
+// Role-based redirection genuinely needs the role, so it keeps its own gate.
+watch([roleLoading, userRole], ([isLoading, role]) => {
+  if (isLoading || typeof window === "undefined" || !currentUser.value) return;
+  const path = window.location.pathname;
 
   if (role === "kassa") {
     if (path !== "/reservations") {
@@ -280,11 +306,7 @@ watch([loading, userRole], ([isLoading, role]) => {
     }
   } else if (role === "user") {
     // Prevent standard users from accessing restricted areas (optional but safer)
-    const allowedForUser = ["/", "/orders/new", "/orders", "/reservations", "/automaten", "/settings"];
-    const isRestricted = !allowedForUser.some(
-      (allowed) => path === allowed || (allowed !== "/" && path.startsWith(allowed)),
-    );
-    if (isRestricted) {
+    if (!isAllowedForUser(path)) {
       window.location.href = "/";
     }
   }

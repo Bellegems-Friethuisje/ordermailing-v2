@@ -146,6 +146,7 @@ async function sendOrderEmail(orderId: string, orderData: any) {
 import { HTTPException } from "hono/http-exception";
 import { adminAuth, db } from "../firebase-admin";
 import type { Query } from "firebase-admin/firestore";
+import { requireAdmin } from "../lib/roles";
 import { getForecast, type WeatherDay } from "../lib/weather";
 import { dutchDayNameShort, getCalendarContext, type CalendarDay } from "../lib/calendar";
 
@@ -294,8 +295,6 @@ orders.use("*", async (c, next) => {
     const idToken = authorization.slice(7);
     const decoded = await adminAuth.verifyIdToken(idToken);
     c.set("uid", decoded.uid);
-    const userDoc = await db.collection("users").doc(decoded.uid).get();
-    c.set("role", userDoc.exists ? (userDoc.data()?.role ?? "user") : "user");
   } catch {
     throw new HTTPException(401, { message: "Invalid or expired token" });
   }
@@ -490,9 +489,7 @@ orders.delete("/:id", async (c) => {
 // ─── GET /api/orders/analytics ───────────────────────────────────────────────
 // Spend analytics over sent orders in a date range. Admins only.
 orders.get("/analytics", async (c) => {
-  if (c.get("role") !== "admin") {
-    throw new HTTPException(403, { message: "Only admins can view spend analytics" });
-  }
+  await requireAdmin(c.get("uid") as string, "Only admins can view spend analytics");
 
   const year = new Date().getFullYear();
   const startOfDay = (d: string) => (d.length === 10 ? `${d}T00:00:00.000Z` : d);
@@ -501,13 +498,19 @@ orders.get("/analytics", async (c) => {
   const fromIso = startOfDay(c.req.query("from") || `${year}-01-01`);
   const toIso = endOfDay(c.req.query("to") || new Date().toISOString().slice(0, 10));
 
-  const snap = await db
-    .collection("orders")
-    .where("status", "==", "sent")
-    .where("createdAt", ">=", fromIso)
-    .where("createdAt", "<=", toIso)
-    .orderBy("createdAt", "desc")
-    .get();
+  // Spend and price-change history come from three independent reads; issuing
+  // them together turns three sequential Firestore round trips into one wait.
+  const [snap, suppliersSnap, productsSnap] = await Promise.all([
+    db
+      .collection("orders")
+      .where("status", "==", "sent")
+      .where("createdAt", ">=", fromIso)
+      .where("createdAt", "<=", toIso)
+      .orderBy("createdAt", "desc")
+      .get(),
+    db.collection("suppliers").get(),
+    db.collectionGroup("products").get(),
+  ]);
 
   const bySupplier = new Map<string, { supplierId: string; supplierName: string; spend: number; orderCount: number }>();
   const byMonth = new Map<string, number>();
@@ -587,36 +590,36 @@ orders.get("/analytics", async (c) => {
     pct: number;
   }> = [];
 
-  const suppliersSnap = await db.collection("suppliers").get();
-  for (const supplierDoc of suppliersSnap.docs) {
-    const supplierName = (supplierDoc.data().name as string) ?? "Onbekend";
-    const productsSnap = await supplierDoc.ref.collection("products").get();
+  // One collection-group read covers every supplier's products, instead of a
+  // `products` query per supplier issued one after the other. The supplier names
+  // come from the parallel `suppliers` read and are joined in memory.
+  const supplierNames = new Map(suppliersSnap.docs.map((doc) => [doc.id, (doc.data().name as string) ?? "Onbekend"]));
 
-    for (const productDoc of productsSnap.docs) {
-      const product = productDoc.data();
-      const history = ((product.priceHistory ?? []) as Array<{ price: number; date: string }>)
-        .filter((entry) => entry && typeof entry.price === "number" && typeof entry.date === "string")
-        .sort((a, b) => a.date.localeCompare(b.date));
+  for (const productDoc of productsSnap.docs) {
+    const product = productDoc.data();
+    const supplierName = supplierNames.get(productDoc.ref.parent.parent?.id ?? "") ?? "Onbekend";
+    const history = ((product.priceHistory ?? []) as Array<{ price: number; date: string }>)
+      .filter((entry) => entry && typeof entry.price === "number" && typeof entry.date === "string")
+      .sort((a, b) => a.date.localeCompare(b.date));
 
-      for (let i = 1; i < history.length; i++) {
-        const { price: newPrice, date: changedAt } = history[i];
-        const oldPrice = history[i - 1].price;
-        if (changedAt < fromIso || changedAt > toIso) continue;
-        if (!(oldPrice > 0)) continue;
+    for (let i = 1; i < history.length; i++) {
+      const { price: newPrice, date: changedAt } = history[i];
+      const oldPrice = history[i - 1].price;
+      if (changedAt < fromIso || changedAt > toIso) continue;
+      if (!(oldPrice > 0)) continue;
 
-        const pct = round2(((newPrice - oldPrice) / oldPrice) * 100);
-        if (Math.abs(pct) <= PRICE_CHANGE_THRESHOLD_PCT) continue;
+      const pct = round2(((newPrice - oldPrice) / oldPrice) * 100);
+      if (Math.abs(pct) <= PRICE_CHANGE_THRESHOLD_PCT) continue;
 
-        priceChanges.push({
-          productId: productDoc.id,
-          internalName: (product.internalName as string) || (product.supplierName as string) || productDoc.id,
-          supplierName,
-          oldPrice,
-          newPrice,
-          changedAt,
-          pct,
-        });
-      }
+      priceChanges.push({
+        productId: productDoc.id,
+        internalName: (product.internalName as string) || (product.supplierName as string) || productDoc.id,
+        supplierName,
+        oldPrice,
+        newPrice,
+        changedAt,
+        pct,
+      });
     }
   }
 

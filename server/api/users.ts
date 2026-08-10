@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { adminAuth, db } from "../firebase-admin";
+import { requireAdmin } from "../lib/roles";
 import { randomUUID } from "crypto";
 
 const users = new Hono();
@@ -45,10 +46,6 @@ users.use("*", async (c, next) => {
     const decoded = await adminAuth.verifyIdToken(idToken);
     c.set("uid", decoded.uid);
     c.set("email", decoded.email ?? "");
-
-    // Fetch role from Firestore and attach to context
-    const userDoc = await db.collection("users").doc(decoded.uid).get();
-    c.set("role", userDoc.exists ? (userDoc.data()?.role ?? "user") : "user");
   } catch {
     throw new HTTPException(401, { message: "Invalid or expired token" });
   }
@@ -94,9 +91,7 @@ users.get("/", async (c) => {
 
 // ─── POST /api/users/invite ───────────────────────────────────────────────────
 users.post("/invite", async (c) => {
-  if (c.get("role") !== "admin") {
-    throw new HTTPException(403, { message: "Only admins can invite new users" });
-  }
+  await requireAdmin(c.get("uid") as string, "Only admins can invite new users");
 
   const token = randomUUID();
   await db.collection("inviteTokens").doc(token).set({
@@ -193,9 +188,7 @@ users.patch("/me/settings", async (c) => {
 
 // ─── PATCH /api/users/:id/role ───────────────────────────────────────────────
 users.patch("/:id/role", async (c) => {
-  if (c.get("role") !== "admin") {
-    throw new HTTPException(403, { message: "Only admins can change roles" });
-  }
+  await requireAdmin(c.get("uid") as string, "Only admins can change roles");
 
   const id = c.req.param("id");
   const { role } = await c.req.json<{ role: string }>();

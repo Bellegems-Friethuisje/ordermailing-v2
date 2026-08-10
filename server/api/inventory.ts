@@ -221,26 +221,29 @@ inventory.post("/", async (c) => {
     throw new HTTPException(400, { message: `Een inventaris voor ${year} bestaat al` });
   }
 
-  const suppliersSnap = await db.collection("suppliers").orderBy("name").get();
-  const items: InventoryItem[] = [];
+  // Opening a count reads the whole catalogue. The suppliers, their products and
+  // the standalone products are independent reads, so they go out together
+  // instead of one supplier's products at a time.
+  const [suppliersSnap, standaloneSnap] = await Promise.all([
+    db.collection("suppliers").orderBy("name").get(),
+    db.collection("inventory_products").orderBy("displayOrder").get(),
+  ]);
 
-  for (const supplierDoc of suppliersSnap.docs) {
+  const activeSuppliers = suppliersSnap.docs.filter((doc) => doc.data().isActive);
+  const productSnaps = await Promise.all(
+    activeSuppliers.map((doc) => doc.ref.collection("products").orderBy("displayOrder").get()),
+  );
+
+  const items: InventoryItem[] = [];
+  activeSuppliers.forEach((supplierDoc, i) => {
     const s = supplierDoc.data();
-    if (!s.isActive) continue;
-    const productsSnap = await db
-      .collection("suppliers")
-      .doc(supplierDoc.id)
-      .collection("products")
-      .orderBy("displayOrder")
-      .get();
-    for (const productDoc of productsSnap.docs) {
+    for (const productDoc of productSnaps[i].docs) {
       const p = productDoc.data();
       if (!p.isActive) continue;
       items.push(supplierItem(productDoc.id, p, supplierDoc.id, s.name));
     }
-  }
+  });
 
-  const standaloneSnap = await db.collection("inventory_products").orderBy("displayOrder").get();
   for (const productDoc of standaloneSnap.docs) {
     const p = productDoc.data();
     if (p.isActive === false) continue;
@@ -335,29 +338,63 @@ inventory.post("/:id/items/add", async (c) => {
   const existing = ((doc.data()?.items ?? []) as InventoryItem[]).map((item) => ({ ...item, source: sourceOf(item) }));
   const present = new Set(existing.map(itemKey));
 
-  const added: InventoryItem[] = [];
+  // Everything below resolves the whole batch at once. Doing it per item meant a
+  // round trip each, and — for items that arrive without a supplierId — a full
+  // scan of every product in the database *per item*.
+  const missing: typeof requested = [];
   for (const req of requested) {
     if (!req?.productId) continue;
     const key = itemKey(req);
     if (present.has(key)) continue;
+    present.add(key);
+    missing.push(req);
+  }
+
+  // Supplier products live in a subcollection, so without a supplierId the only
+  // way to find one is the product collection group. That scan now runs at most
+  // once, and only when something actually needs it.
+  const needsScan = missing.some((req) => sourceOf(req) === "supplier" && !req.supplierId);
+  const scanned = needsScan
+    ? new Map((await db.collectionGroup("products").get()).docs.map((doc) => [doc.id, doc]))
+    : new Map();
+
+  const productDocs = await Promise.all(
+    missing.map((req) => {
+      if (sourceOf(req) === "standalone") return db.collection("inventory_products").doc(req.productId).get();
+      if (req.supplierId) {
+        return db.collection("suppliers").doc(req.supplierId).collection("products").doc(req.productId).get();
+      }
+      return scanned.get(req.productId);
+    }),
+  );
+
+  // Distinct suppliers only — a batch of products from one supplier used to read
+  // that supplier document once per product.
+  const supplierIds = new Set<string>();
+  missing.forEach((req, i) => {
+    if (sourceOf(req) === "standalone") return;
+    const parent = productDocs[i]?.ref.parent.parent;
+    if (parent) supplierIds.add(parent.id);
+  });
+  const supplierNames = new Map<string, string>();
+  if (supplierIds.size > 0) {
+    const supplierDocs = await db.getAll(...[...supplierIds].map((id) => db.collection("suppliers").doc(id)));
+    for (const doc of supplierDocs) supplierNames.set(doc.id, (doc.data()?.name as string) ?? "");
+  }
+
+  const added: InventoryItem[] = [];
+  missing.forEach((req, i) => {
+    const productDoc = productDocs[i];
+    if (!productDoc?.exists) throw new HTTPException(404, { message: `Product ${req.productId} bestaat niet` });
 
     if (sourceOf(req) === "standalone") {
-      const productDoc = await db.collection("inventory_products").doc(req.productId).get();
-      if (!productDoc.exists) throw new HTTPException(404, { message: `Product ${req.productId} bestaat niet` });
       added.push(standaloneItem(productDoc.id, productDoc.data()!));
     } else {
-      // Supplier products live in a subcollection, so we need the supplier too.
-      // Without it, fall back to scanning the product collection group.
-      const productDoc = req.supplierId
-        ? await db.collection("suppliers").doc(req.supplierId).collection("products").doc(req.productId).get()
-        : (await db.collectionGroup("products").get()).docs.find((d) => d.id === req.productId);
-      if (!productDoc?.exists) throw new HTTPException(404, { message: `Product ${req.productId} bestaat niet` });
       const supplierRef = productDoc.ref.parent.parent!;
-      const supplierDoc = await supplierRef.get();
-      added.push(supplierItem(productDoc.id, productDoc.data()!, supplierRef.id, supplierDoc.data()?.name ?? ""));
+      const name = supplierNames.get(supplierRef.id) ?? "";
+      added.push(supplierItem(productDoc.id, productDoc.data()!, supplierRef.id, name));
     }
-    present.add(key);
-  }
+  });
 
   const items = [...existing, ...added];
   if (added.length > 0) await ref.update({ items });

@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { FieldValue } from "firebase-admin/firestore";
 import { adminAuth, db } from "../firebase-admin";
+import { requireAdmin } from "../lib/roles";
 
 const suppliers = new Hono();
 
@@ -35,8 +36,6 @@ suppliers.use("*", async (c, next) => {
     const idToken = authorization.slice(7);
     const decoded = await adminAuth.verifyIdToken(idToken);
     c.set("uid", decoded.uid);
-    const userDoc = await db.collection("users").doc(decoded.uid).get();
-    c.set("role", userDoc.exists ? (userDoc.data()?.role ?? "user") : "user");
   } catch {
     throw new HTTPException(401, { message: "Invalid or expired token" });
   }
@@ -47,12 +46,17 @@ suppliers.use("*", async (c, next) => {
 // ─── GET /api/suppliers ───────────────────────────────────────────────────────
 suppliers.get("/", async (c) => {
   const snapshot = await db.collection("suppliers").orderBy("name").get();
-  const list = await Promise.all(
-    snapshot.docs.map(async (doc) => {
-      const productsSnap = await db.collection("suppliers").doc(doc.id).collection("products").get();
-      return { id: doc.id, ...doc.data(), productCount: productsSnap.size };
-    }),
+  // `productCount` only needs the number, so ask Firestore to count server-side.
+  // Fetching the `products` subcollection instead pulled every product document
+  // over the wire — the whole catalogue — to then throw all of it away.
+  const counts = await Promise.all(
+    snapshot.docs.map((doc) => db.collection("suppliers").doc(doc.id).collection("products").count().get()),
   );
+  const list = snapshot.docs.map((doc, i) => ({
+    id: doc.id,
+    ...doc.data(),
+    productCount: counts[i].data().count,
+  }));
   return c.json(list);
 });
 
@@ -275,11 +279,15 @@ suppliers.put("/:id/products/prices", async (c) => {
   let updated = 0;
   let historyAppended = 0;
 
-  for (const entry of prices) {
-    if (!entry?.productId) continue;
-    const ref = collection.doc(entry.productId);
-    const snap = await ref.get();
+  // One `getAll` for the whole page of prices, rather than a round trip per row
+  // in sequence — bulk price entry submits the supplier's entire catalogue.
+  const wanted = prices.filter((entry) => entry?.productId);
+  const snaps = wanted.length > 0 ? await db.getAll(...wanted.map((entry) => collection.doc(entry.productId))) : [];
+
+  for (const [i, entry] of wanted.entries()) {
+    const snap = snaps[i];
     if (!snap.exists) continue;
+    const ref = snap.ref;
 
     const nextPrice = toPrice(entry.price);
     const currentPrice = toPrice(snap.data()?.price);
@@ -314,9 +322,7 @@ suppliers.delete("/:id/products/:productId", async (c) => {
 // Accepts: root array, { suppliers: [...] }, or { data: [...] }
 // Product fields: orderName/supplierName → supplierName, displayName/internalName → internalName
 suppliers.post("/import", async (c) => {
-  if (c.get("role") !== "admin") {
-    throw new HTTPException(403, { message: "Only admins can import supplier data" });
-  }
+  await requireAdmin(c.get("uid") as string, "Only admins can import supplier data");
 
   const body = await c.req.json<unknown>();
 
@@ -336,15 +342,19 @@ suppliers.post("/import", async (c) => {
     throw new HTTPException(400, { message: "Supplier list is empty" });
   }
 
+  // A full wipe-and-replace is thousands of writes. Each one used to be its own
+  // awaited round trip; a BulkWriter pipelines them and is the difference
+  // between an import that takes minutes and one that takes seconds. New docs
+  // get fresh auto-ids, so deletes and creates cannot collide when interleaved.
+  const writer = db.bulkWriter();
+
   // 1. Delete all existing suppliers and their products
-  const existingSnap = await db.collection("suppliers").get();
-  for (const existingDoc of existingSnap.docs) {
-    const productsSnap = await db.collection("suppliers").doc(existingDoc.id).collection("products").get();
-    const batch = db.batch();
-    productsSnap.docs.forEach((p) => batch.delete(p.ref));
-    batch.delete(existingDoc.ref);
-    await batch.commit();
-  }
+  const [existingSnap, existingProductsSnap] = await Promise.all([
+    db.collection("suppliers").get(),
+    db.collectionGroup("products").get(),
+  ]);
+  for (const productDoc of existingProductsSnap.docs) writer.delete(productDoc.ref);
+  for (const existingDoc of existingSnap.docs) writer.delete(existingDoc.ref);
 
   // 2. Insert new suppliers and their products
   let suppliersCreated = 0;
@@ -353,7 +363,8 @@ suppliers.post("/import", async (c) => {
   for (const raw of incoming) {
     const s = raw as Record<string, unknown>;
     if (!s.name) continue;
-    const supplierRef = await db.collection("suppliers").add({
+    const supplierRef = db.collection("suppliers").doc();
+    writer.create(supplierRef, {
       name: s.name,
       email: s.email ?? "",
       description: s.description ?? "",
@@ -370,27 +381,25 @@ suppliers.post("/import", async (c) => {
       const internalName = (p.displayName ?? p.internalName ?? supplierName) as string;
       if (!supplierName) continue;
       const price = toPrice(p.price);
-      await db
-        .collection("suppliers")
-        .doc(supplierRef.id)
-        .collection("products")
-        .add({
-          supplierName,
-          internalName,
-          description: p.description ?? "",
-          manualOrder: p.manualOrder ?? false,
-          isActive: p.isActive ?? true,
-          idealStock: (p.defaultStock ?? p.idealStock ?? 0) as number,
-          displayOrder: (p.displayOrder ?? 0) as number,
-          price,
-          priceUnit: (p.priceUnit as string) || "stuk",
-          supplierUrl: (p.supplierUrl as string) ?? "",
-          priceHistory: price > 0 ? [priceHistoryEntry(price, "manual")] : [],
-          createdAt: new Date().toISOString(),
-        });
+      writer.create(supplierRef.collection("products").doc(), {
+        supplierName,
+        internalName,
+        description: p.description ?? "",
+        manualOrder: p.manualOrder ?? false,
+        isActive: p.isActive ?? true,
+        idealStock: (p.defaultStock ?? p.idealStock ?? 0) as number,
+        displayOrder: (p.displayOrder ?? 0) as number,
+        price,
+        priceUnit: (p.priceUnit as string) || "stuk",
+        supplierUrl: (p.supplierUrl as string) ?? "",
+        priceHistory: price > 0 ? [priceHistoryEntry(price, "manual")] : [],
+        createdAt: new Date().toISOString(),
+      });
       productsCreated++;
     }
   }
+
+  await writer.close();
 
   return c.json({ ok: true, suppliersCreated, productsCreated });
 });
