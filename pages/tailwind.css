@@ -108,4 +108,39 @@
   body {
     @apply bg-background text-foreground;
   }
+
+  /* Printed reports always render in the light palette, and keep bar/badge
+     colors intact — browsers drop background colors on print by default. */
+  @media print {
+    :root {
+      --background: oklch(1 0 0);
+      --foreground: oklch(0.145 0 0);
+      --card: oklch(1 0 0);
+      --card-foreground: oklch(0.145 0 0);
+      --primary: oklch(0.205 0 0);
+      --primary-foreground: oklch(0.985 0 0);
+      --muted: oklch(0.97 0 0);
+      --muted-foreground: oklch(0.556 0 0);
+      --border: oklch(0.922 0 0);
+    }
+    * {
+      print-color-adjust: exact !important;
+      -webkit-print-color-adjust: exact !important;
+    }
+
+    /* Print only a page's opted-in report container — hides the sidebar,
+       header and any surrounding chrome without depending on their markup. */
+    body:has(#print-report) * {
+      visibility: hidden;
+    }
+    #print-report,
+    #print-report * {
+      visibility: visible;
+    }
+    #print-report {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+    }
+  }
 }

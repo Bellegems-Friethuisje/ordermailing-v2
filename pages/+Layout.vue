@@ -194,6 +194,7 @@ import {
   FileText,
   Euro,
   Boxes,
+  PackageSearch,
 } from "lucide-vue-next";
 
 // ─── What's new ───────────────────────────────────────────────────────────────
@@ -337,6 +338,7 @@ const allNav = [
   { label: "Sollicitaties", url: "/sollicitaties", icon: FileText },
   { label: "Suppliers", url: "/suppliers", icon: Truck },
   { label: "Uitgaven", url: "/analytics", icon: Euro },
+  { label: "Bestelrapport", url: "/reports", icon: PackageSearch },
   { label: "Inventaris", url: "/inventory", icon: Boxes },
   { label: "History", url: "/history", icon: History },
   { label: "Automaten", url: "/automaten", icon: Bot },

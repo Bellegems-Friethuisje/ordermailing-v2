@@ -19,6 +19,8 @@ function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
+const DAY_MS = 86_400_000;
+
 /** €1.234,50 — Dutch formatting, used in the order email. */
 function formatEuro(n: number): string {
   return `€ ${n.toLocaleString("nl-NL", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -145,7 +147,7 @@ async function sendOrderEmail(orderId: string, orderData: any) {
 }
 import { HTTPException } from "hono/http-exception";
 import { adminAuth, db } from "../firebase-admin";
-import type { Query } from "firebase-admin/firestore";
+import type { Query, QuerySnapshot } from "firebase-admin/firestore";
 import { requireAdmin } from "../lib/roles";
 import { getForecast, type WeatherDay } from "../lib/weather";
 import { dutchDayNameShort, getCalendarContext, type CalendarDay } from "../lib/calendar";
@@ -632,6 +634,209 @@ orders.get("/analytics", async (c) => {
     byMonth: months,
     topProducts: [...byProduct.values()].sort((a, b) => b.spend - a.spend).slice(0, 20),
     priceChanges,
+  });
+});
+
+// ─── GET /api/orders/report ───────────────────────────────────────────────────
+// Over-ordering report: compares two periods (A = baseline, B = period under
+// review) per product. Rates are normalized per day so periods of different
+// lengths (e.g. "last 3 months" as a baseline vs "this month") stay comparable.
+// Admins only.
+orders.get("/report", async (c) => {
+  await requireAdmin(c.get("uid") as string, "Only admins can view order reports");
+
+  const startOfDay = (d: string) => (d.length === 10 ? `${d}T00:00:00.000Z` : d);
+  const endOfDay = (d: string) => (d.length === 10 ? `${d}T23:59:59.999Z` : d);
+
+  const fromA = c.req.query("fromA");
+  const toA = c.req.query("toA");
+  const fromB = c.req.query("fromB");
+  const toB = c.req.query("toB");
+  if (!fromA || !toA || !fromB || !toB) {
+    throw new HTTPException(400, { message: "fromA, toA, fromB and toB are required" });
+  }
+
+  const rangeA = { fromIso: startOfDay(fromA), toIso: endOfDay(toA) };
+  const rangeB = { fromIso: startOfDay(fromB), toIso: endOfDay(toB) };
+
+  /** Inclusive day count between two YYYY-MM-DD dates. */
+  const dayCount = (from: string, to: string) =>
+    Math.max(1, Math.round((Date.parse(endOfDay(to)) - Date.parse(startOfDay(from))) / DAY_MS) + 1);
+
+  const daysA = dayCount(fromA, toA);
+  const daysB = dayCount(fromB, toB);
+
+  // Matches the (status ASC, createdAt DESC) composite index the "/analytics"
+  // route already relies on — omitting orderBy makes Firestore want a second,
+  // differently-ordered index for the same two fields.
+  const fetchOrders = (range: { fromIso: string; toIso: string }) =>
+    db
+      .collection("orders")
+      .where("status", "==", "sent")
+      .where("createdAt", ">=", range.fromIso)
+      .where("createdAt", "<=", range.toIso)
+      .orderBy("createdAt", "desc")
+      .get();
+
+  const [snapA, snapB, productsSnap] = await Promise.all([
+    fetchOrders(rangeA),
+    fetchOrders(rangeB),
+    db.collectionGroup("products").get(),
+  ]);
+
+  type ProductAgg = {
+    productId: string;
+    internalName: string;
+    supplierName: string;
+    supplierId: string;
+    qty: number;
+    spend: number;
+  };
+
+  function aggregate(snap: QuerySnapshot) {
+    const byProduct = new Map<string, ProductAgg>();
+    let totalQuantity = 0;
+    let totalSpend = 0;
+    let orderCount = 0;
+
+    for (const doc of snap.docs) {
+      const order = doc.data();
+      orderCount++;
+      const lines = (order.lines ?? []) as Array<Record<string, any>>;
+      for (const line of lines) {
+        if (!line.productId || !(line.quantity > 0)) continue;
+        totalQuantity += line.quantity;
+        const spend = line.lineTotal ?? 0;
+        totalSpend += spend;
+
+        const existing = byProduct.get(line.productId);
+        if (existing) {
+          existing.qty += line.quantity;
+          existing.spend = round2(existing.spend + spend);
+        } else {
+          byProduct.set(line.productId, {
+            productId: line.productId,
+            internalName: line.internalName || line.supplierName || line.productId,
+            supplierName: (order.supplierName as string) ?? "Onbekend",
+            supplierId: (order.supplierId as string) ?? "",
+            qty: line.quantity,
+            spend: round2(spend),
+          });
+        }
+      }
+    }
+
+    return {
+      byProduct,
+      totals: {
+        totalQuantity,
+        totalSpend: round2(totalSpend),
+        orderCount,
+        distinctProducts: byProduct.size,
+      },
+    };
+  }
+
+  const aggA = aggregate(snapA);
+  const aggB = aggregate(snapB);
+
+  // Ideal stock is a secondary reference, not the over-order signal itself —
+  // it's often stale, but still useful context next to the trend-based flag.
+  const idealStockMap = new Map<string, number>();
+  for (const productDoc of productsSnap.docs) {
+    idealStockMap.set(productDoc.id, (productDoc.data().idealStock as number) ?? 0);
+  }
+
+  // A rate increase this small is within normal week-to-week noise; only
+  // flag products where the pace jump is both relatively and absolutely real.
+  const INCREASE_THRESHOLD_PCT = 30;
+  const MIN_EXTRA_QTY = 3;
+
+  const productIds = new Set([...aggA.byProduct.keys(), ...aggB.byProduct.keys()]);
+  const products = [...productIds].map((productId) => {
+    const a = aggA.byProduct.get(productId);
+    const b = aggB.byProduct.get(productId);
+    const source = b ?? a!;
+
+    const qtyA = a?.qty ?? 0;
+    const qtyB = b?.qty ?? 0;
+    const spendA = a?.spend ?? 0;
+    const spendB = b?.spend ?? 0;
+    const rateA = qtyA / daysA;
+    const rateB = qtyB / daysB;
+
+    // How much B differs from what A's daily pace would predict over B's length —
+    // the real, volume-weighted signal behind the "over-ordered" ranking.
+    const expectedQtyB = round2(rateA * daysB);
+    const extraQty = round2(qtyB - expectedQtyB);
+    const deltaPct = rateA > 0 ? round2(((rateB - rateA) / rateA) * 100) : qtyB > 0 ? null : 0;
+
+    const idealStock = idealStockMap.get(productId) ?? 0;
+    const pctOfIdealStock = idealStock > 0 ? round2((qtyB / idealStock) * 100) : null;
+
+    let status: "new" | "stopped" | "increased" | "decreased" | "stable";
+    if (qtyA === 0 && qtyB > 0) status = "new";
+    else if (qtyA > 0 && qtyB === 0) status = "stopped";
+    else if (deltaPct !== null && deltaPct >= INCREASE_THRESHOLD_PCT && extraQty >= MIN_EXTRA_QTY) status = "increased";
+    else if (deltaPct !== null && deltaPct <= -INCREASE_THRESHOLD_PCT) status = "decreased";
+    else status = "stable";
+
+    return {
+      productId,
+      internalName: source.internalName,
+      supplierName: source.supplierName,
+      supplierId: source.supplierId,
+      idealStock,
+      pctOfIdealStock,
+      qtyA,
+      qtyB,
+      spendA,
+      spendB,
+      deltaPct,
+      extraQty,
+      status,
+    };
+  });
+
+  // Biggest real-volume overshoots first — a 200% jump on 2 units matters
+  // less than a 40% jump on 400 units.
+  const overOrdered = products
+    .filter((p) => p.status === "new" || p.status === "increased")
+    .filter((p) => p.extraQty > 0)
+    .sort((a, b) => b.extraQty - a.extraQty)
+    .slice(0, 25);
+
+  const underOrdered = products
+    .filter((p) => p.status === "decreased" || p.status === "stopped")
+    .sort((a, b) => a.extraQty - b.extraQty)
+    .slice(0, 25);
+
+  // ─── By supplier ──────────────────────────────────────────────────────────
+  type SupplierAgg = { supplierId: string; supplierName: string; qtyA: number; qtyB: number; spendA: number; spendB: number };
+  const supplierMap = new Map<string, SupplierAgg>();
+  const touchSupplier = (id: string, name: string) => {
+    if (!supplierMap.has(id)) supplierMap.set(id, { supplierId: id, supplierName: name, qtyA: 0, qtyB: 0, spendA: 0, spendB: 0 });
+    return supplierMap.get(id)!;
+  };
+  for (const p of aggA.byProduct.values()) {
+    const s = touchSupplier(p.supplierId, p.supplierName);
+    s.qtyA += p.qty;
+    s.spendA = round2(s.spendA + p.spend);
+  }
+  for (const p of aggB.byProduct.values()) {
+    const s = touchSupplier(p.supplierId, p.supplierName);
+    s.qtyB += p.qty;
+    s.spendB = round2(s.spendB + p.spend);
+  }
+  const bySupplier = [...supplierMap.values()].sort((a, b) => b.spendB - a.spendB);
+
+  return c.json({
+    periodA: { from: fromA, to: toA, days: daysA, ...aggA.totals },
+    periodB: { from: fromB, to: toB, days: daysB, ...aggB.totals },
+    products: products.sort((a, b) => b.qtyB - a.qtyB),
+    overOrdered,
+    underOrdered,
+    bySupplier,
   });
 });
 
